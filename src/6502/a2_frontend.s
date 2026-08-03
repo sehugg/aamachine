@@ -80,9 +80,9 @@ TRACE_STORE	= 0
 
 ; ---- Monitor entry points ----
 
-;COUT		= $fded
+COUT		= $fded
 COUT1		= $fdf0
-;VIDOUT		= $fbfd
+VIDOUT		= $fbfd
 HOME		= $fc58
 VTAB		= $fc22
 SETTXT		= $fb39
@@ -217,12 +217,13 @@ plain
 	bpl	nofold
 
 	cmp	#'a'
-	bcc	nofold
+	bcc	nolower
 
 	cmp	#'z'+1
-	bcs	nofold
+	bcs	nolower
 
 	and	#$df
+nolower
 nofold
 	ldx	xpos
 	cpx	scrw
@@ -725,7 +726,7 @@ cout
 	.(
 	stx	coutx
 	sty	couty
-	jsr	COUT1
+	jsr	COUT
 	ldx	coutx
 	ldy	couty
 	rts
