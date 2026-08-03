@@ -123,12 +123,18 @@ void usage(char *prgname) {
 	fprintf(stderr, "--help      -h    Display this information.\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "--output    -o    Set output directory/file name.\n");
-	fprintf(stderr, "--target    -t    Select target (web, c64, web:story).\n");
+	fprintf(stderr, "--target    -t    Select target (web, c64, apple2, web:story).\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Targets:\n");
 	fprintf(stderr, "web (default)     Directory with web interpreter.\n");
 	fprintf(stderr, "c64               Directory with c64 disk image.\n");
+	fprintf(stderr, "apple2            Directory with ProDOS interpreter and story file.\n");
 	fprintf(stderr, "web:story         Just story.js for the web interpreter.\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "The apple2 target emits the two files that belong on a ProDOS\n");
+	fprintf(stderr, "disk, rather than a disk image, because a bootable volume needs\n");
+	fprintf(stderr, "the ProDOS boot blocks and kernel, which are Apple's and are not\n");
+	fprintf(stderr, "distributed with these tools.  See the readme.txt it writes.\n");
 	exit(1);
 }
 
@@ -178,7 +184,8 @@ int main(int argc, char **argv) {
 
 	if(strcmp(target, "web")
 	&& strcmp(target, "web:story")
-	&& strcmp(target, "c64")) {
+	&& strcmp(target, "c64")
+	&& strcmp(target, "apple2")) {
 		fprintf(stderr, "Unsupported target \"%s\".\n", target);
 		exit(1);
 	}
@@ -247,6 +254,8 @@ int main(int argc, char **argv) {
 			bundle_web(dirname);
 		} else if(!strcmp(target, "c64")) {
 			bundle_c64(dirname);
+		} else if(!strcmp(target, "apple2")) {
+			bundle_apple2(dirname);
 		}
 	}
 

@@ -16,6 +16,9 @@ windows: aamrun.exe aamshow.exe aambundle.exe
 6502:
 	$(MAKE) -C 6502
 
+apple2:
+	$(MAKE) -C 6502 apple2
+
 tidy:
 	rm -f *.o
 
@@ -40,7 +43,9 @@ distclean: clean uninstall
 aamshow: aamshow.c crc32.c aavm.c aavm.h crc32.h
 	${CC} ${CFLAGS} -o $@ aamshow.c crc32.c aavm.c
 
-aambundle: aambundle.c bundle_web.c bundle_c64.c \
+aambundle: aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c \
+	table_a2terp.h \
+	table_a2license.h \
 	table_c64license.h \
 	table_c64drive.h \
 	table_c64load.h \
@@ -51,7 +56,7 @@ aambundle: aambundle.c bundle_web.c bundle_c64.c \
 	table_front.h \
 	table_jquery.h \
 	table_play.h
-	${CC} ${CFLAGS} -o $@ aambundle.c bundle_web.c bundle_c64.c
+	${CC} ${CFLAGS} -o $@ aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c
 
 aamrun.linux:	js/nodefrontend.js js/engine.js
 	pkg -t linux -o aamrun.linux js/nodefrontend.js
@@ -68,7 +73,9 @@ aamrun.exe: js/nodefrontend.js js/engine.js
 aamshow.exe: aamshow.c crc32.c aavm.c aavm.h crc32.h
 	${MINGW32} ${CFLAGS} -o $@ aamshow.c crc32.c aavm.c
 
-aambundle.exe: aambundle.c bundle_web.c bundle_c64.c \
+aambundle.exe: aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c \
+	table_a2terp.h \
+	table_a2license.h \
 	table_c64license.h \
 	table_c64drive.h \
 	table_c64load.h \
@@ -79,7 +86,13 @@ aambundle.exe: aambundle.c bundle_web.c bundle_c64.c \
 	table_front.h \
 	table_jquery.h \
 	table_play.h
-	${MINGW32} ${CFLAGS} -o $@ aambundle.c bundle_web.c bundle_c64.c
+	${MINGW32} ${CFLAGS} -o $@ aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c
+
+table_a2terp.h:		apple2 6502/a2.system mkheader
+			./mkheader table_a2terp <6502/a2.system >$@
+
+table_a2license.h:	6502/a2_license.txt mkheader
+			./mkheader table_a2license <6502/a2_license.txt >$@
 
 table_c64license.h:	6502 6502/license.txt mkheader
 			./mkheader table_c64license <6502/license.txt >$@
@@ -111,4 +124,4 @@ table_jquery.h:		js/jquery-3.4.1.min.js mkheader
 table_play.h:		js/webfrontend.html mkheader
 			./mkheader table_play <$< >$@
 
-.PHONY:	all clean tidy install uninstall distclean windows 6502
+.PHONY:	all clean tidy install uninstall distclean windows 6502 apple2
