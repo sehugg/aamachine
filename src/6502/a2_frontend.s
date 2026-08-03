@@ -202,17 +202,8 @@ p_quit		= $029b	; 7 bytes
 ; Main text area
 ; =====================================
 
-io_mputc
-	; input a = char
-
+do_foldup
 	.(
-	cmp	#$20
-	beq	space
-	bcc	ignore
-
-	cmp	#$80
-	bcs	extended
-plain
 	bit	foldup
 	bpl	nofold
 
@@ -225,6 +216,21 @@ plain
 	and	#$df
 nolower
 nofold
+	rts
+	.)
+
+io_mputc
+	; input a = char
+
+	.(
+	cmp	#$20
+	beq	space
+	bcc	ignore
+
+	cmp	#$80
+	bcs	extended
+plain
+	jsr	do_foldup
 	ldx	xpos
 	cpx	scrw
 	bcs	wrap
@@ -482,6 +488,7 @@ io_sputc
 	; input a = char
 
 	.(
+	jsr	do_foldup
 	ldy	strow
 	bpl	screen
 
@@ -539,6 +546,7 @@ io_scommit
 	ldx	#0
 	ldy	#0
 	jsr	gotoxy
+	jsr	set_inverse
 
 	ldx	#0
 loop
@@ -555,6 +563,7 @@ loop
 	ldx	xpos
 	ldy	cury
 	jsr	gotoxy
+	jsr	set_normal	; do we have to restore?
 	rts
 	.)
 
@@ -757,28 +766,49 @@ gotoxy
 	sty	CV
 	jmp	VTAB
 firmware
+	lda	#25	; move to (0,0)
+	jsr	cout
+	cpy	#0
+	beq	noy
+fwy
+	lda	#10	; move down
+	jsr	cout
+	dey
+	bne	fwy
+noy
+	cpx	#0
+	beq	nox
+fwx
+	lda	#28	; move right
+	jsr	cout
+	dex
+	bne	fwx
+nox
+	rts
+
 	; the firmware GOTOXY escape --
 	; ctrl-^ then (col+32), (row+32).
 	; cout uses coutx and couty as its own
 	; scratch, so the stack holds these.
-
+/*
 	tya
 	pha
 	txa
 	pha
 
-	lda	#$9e
+	lda	#30
 	jsr	cout
 
 	pla
 	clc
-	adc	#$a0
+	adc	#32
 	jsr	cout
 
 	pla
 	clc
-	adc	#$a0
+	adc	#32
 	jmp	cout
+*/
 	.)
 
 set_inverse
