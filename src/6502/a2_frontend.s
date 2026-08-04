@@ -38,13 +38,11 @@
 ;  0100 - 01ff	stack
 ;  0200 - 02ff	frontend buffers and MLI
 ;		parameter blocks
-;  0300 - 03ff	relocator (dead after boot)
+;  0300 - 03ff	aux page cache tables
 ;  0400 - 07ff	text page 1
-;  0800 -~4200	interpreter code
-; ~4200 -~4a00	init code, reclaimed as cache
-; ~4a00 - ????	page buffers
-;  ???? - b7ff	dynamic data
-;  b800 - baff	statically linked data
+;  0800 -~4000	interpreter code
+; ~4000 -~4800	init code, reclaimed as cache
+; ~4000 - baff	page buffers / dynamic data
 ;  bb00 - beff	ProDOS file buffer
 ;  bf00 - bfff	ProDOS global page
 ;  d000 - ffff	ProDOS 8 (language card)
@@ -52,8 +50,8 @@
 ; Auxiliary memory, when there is any
 ; =====================================
 ;  0400 - 07ff	80-column text page
-;  0800 - 87ff  additional page cache
-;  8800 - beff	undo ring
+;  0800 - 87ff  aux page cache
+;  8800 - beff	aux undo ring
 ;
 ; TODO The 80STORE soft switch remaps $0400-$07ff
 ; and $2000-$3fff, so staying above both
@@ -70,15 +68,17 @@
 ;   https://savagetaylor.com/til/TA33130.html
 ;
 ; TODO
-; * save/load
-; * inverse mode sometimes seems confused in 80 column
-; * 2-disk mode - "STORY-xx-yy"
+; - save/load
+; - inverse mode sometimes seems confused in 80 column
+; - 2-disk mode - "STORY-xx-yy"
+; - use the packer instead of boot mover
+; - RWTS18 non-ProDOS verison using lang card RAM
 
 DEFWIDTH	= 80
 
 PREXTRA		= 2
 PRSHIFT		= 0
-HAVE_QUIT	= 1
+HAVE_QUIT	= 0	; we don't have BASIC.SYSTEM
 HAVE_STATUS	= 1
 HAVE_STYLE	= 1
 
@@ -138,8 +138,8 @@ AUXCACHEPAGES	= $80
 AUXCACHELO	= $300		; virtual page # for each aux cache page
 AUXCACHEHI	= $380
 
-AUXUNDOLO		= $8800
-AUXUNDOHI		= $beff	; TODO inclusive
+AUXUNDOLO	= $8800
+AUXUNDOHI	= $beff		; TODO inclusive?
 
 ; ---- frontend zero page ----
 
@@ -1594,34 +1594,9 @@ NTRANS = trlo-trhi
 
 coldstart
 	.(
-; Apple ][ boot doesn't clear all zero page so we do it here
-	lda	#0
-	ldx	#$c0
-clrlp
-	sta	$3f,x
-	dex
-	bne	clrlp
-
 	jsr	initsystem
 
 	jsr	initengine0
-
-	; zero system bitmap to unprotect the unused parts of
-	; the current program if loaded as system pgm (TODO)
-	lda	#0
-	ldx	#16	; is enough pages?
-zsblp
-	sta	$bf58+initengine0/$800,x
-	dex
-	bpl	zsblp
-
-	; clear the aux cache lookup table
-	lda	#$ff
-	ldx	#AUXCACHEPAGES
-auxclrlp
-	sta	AUXCACHEHI-1,x
-	dex
-	bne	auxclrlp
 
 	; initengine0 has just set screenw from
 	; DEFWIDTH; the real width is whatever
@@ -1649,6 +1624,22 @@ auxclrlp
 
 initsystem
 	.(
+	; Apple ][ boot doesn't clear engine zero page so we do it here
+	lda	#0
+	ldx	#$c0
+clrlp
+	sta	$3f,x
+	dex
+	bne	clrlp
+
+	; clear the aux cache lookup table
+	lda	#$ff
+	ldx	#AUXCACHEPAGES
+auxclrlp
+	sta	AUXCACHEHI-1,x
+	dex
+	bne	auxclrlp
+
 	lda	#0
 	sta	wrappos
 	sta	xpos
@@ -1668,7 +1659,6 @@ initsystem
 	jsr	detect
 	jsr	setupvideo
 	jsr	initparms
-	jsr	claimmemory
 	jsr	removeram
 	jsr	banner
 	jmp	openstory
@@ -1778,31 +1768,10 @@ loop
 	rts
 	.)
 
-claimmemory
-	; Mark every page of main RAM as in use
-	; so that ProDOS never allocates over the
-	; engine, but leave $bb..$be free for the
-	; file buffer OPEN is about to take.
-
-	.(
-	ldx	#22
-loop
-	lda	#$ff
-	sta	MEMBITMAP,x
-	dex
-	bpl	loop
-
-	lda	#$e1
-	sta	MEMBITMAP+23
-	rts
-	.)
-
 removeram
 	; ProDOS puts its RAM disk in auxiliary
-	; memory, which is where the undo ring
-	; goes, so unhook it first.  Nothing to
-	; do if there is no aux RAM, and nothing
-	; to do if ProDOS never installed it.
+	; memory, which is where the undo ring / aux page cache
+	; goes, so unhook it first, if it's there.
 
 	.(
 	bit	auxram
