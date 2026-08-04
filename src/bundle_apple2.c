@@ -19,10 +19,11 @@
  *
  * AAM.SYSTEM is a ProDOS system program, type SYS ($ff), load address
  * $2000.  ProDOS runs the first *.SYSTEM file in the volume directory at
- * boot, so it should be the only one on the disk.
+ * boot, so it should be the only one on the disk. It has a stub to relocate
+ * it to its final address of 0x800.
  *
  * STORY is read through the MLI a page at a time and never loaded whole,
- * so its file type does not matter.
+ * so its file type should be $06 (binary)
  */
 
 static char storyname[48];
@@ -51,54 +52,51 @@ static void writefile(char *dirname, char *name, const uint8_t *data, size_t siz
 }
 
 static const char readme[] =
-"Aa-machine for the Apple II\n"
-"===========================\n"
+"Aa-machine for the Apple II family\n"
+"==================================\n"
 "\n"
-"This directory holds the two files that go on a ProDOS disk.\n"
+"This directory holds the two files that go on a ProDOS disk:\n"
 "\n"
 "  AAM.SYSTEM   the interpreter.  ProDOS file type SYS ($ff),\n"
 "               auxiliary type (load address) $2000.\n"
-"  STORY        the story file.  Any file type will do; BIN ($06)\n"
+"\n"
+"  STORY        the story file.  ProDOS file type BIN ($06)\n"
 "               is a reasonable choice.  The name must be STORY,\n"
 "               in the volume directory, because that is the\n"
 "               pathname the interpreter opens.\n"
 "\n"
+"System Requirements\n"
+"-------------------\n"
+"\n"
+"64 kB and ProDOS 8.  The interpreter identifies the machine at boot\n"
+"and adapts to it:\n"
+"\n"
+"  Apple ][+            40 columns, upper case only\n"
+"  //e / //c / IIgs     80 columns when an 80-column card is present\n"
+"  128 kB machines      undo support\n"
+"\n"
+"On a 128 kB machine the ProDOS RAM disk is disconnected at startup,\n"
+"because the undo history lives where /RAM would.\n"
+"\n"
 "Building a bootable disk\n"
 "------------------------\n"
 "\n"
-"Start from a bootable ProDOS volume.  The boot blocks and the PRODOS\n"
-"kernel are Apple's, so they are not distributed here.  An 800 kB\n"
-"volume is recommended; a 140 kB floppy cannot hold a large story.\n"
+"We need to create a bootable ProDOS volume, and for that we first need\n"
+"a bootable ProDOS disk image to copy from.\n"
+"\n"
+"* Install AppleCommander from https://applecommander.github.io/\n"
+"* Get the disk image 'ProDOS_2_4_3.po' from https://prodos8.com/\n"
 "\n"
 "AAM.SYSTEM must be the only *.SYSTEM file on the volume, since ProDOS\n"
 "runs the first one it finds.\n"
 "\n"
 "With AppleCommander:\n"
 "\n"
-"  java -jar AppleCommander.jar -d      disk.po AAM.SYSTEM\n"
-"  java -jar AppleCommander.jar -d      disk.po BASIC.SYSTEM\n"
-"  java -jar AppleCommander.jar -p      disk.po AAM.SYSTEM SYS 0x2000 <AAM.SYSTEM\n"
-"  java -jar AppleCommander.jar -p      disk.po STORY BIN 0x0000 <STORY\n"
+"  acx create -d disk.po -f ProDOS_2_4_3.po -s 800k --prodos\n"
+"  ac -p disk.po AAM.SYSTEM SYS 0x2000 <AAM.SYSTEM\n"
+"  ac -p disk.po STORY BIN 0x0000 <STORY\n"
 "\n"
-"With Ciderpress II:\n"
-"\n"
-"  cp2 rm       disk.po BASIC.SYSTEM\n"
-"  cp2 add      disk.po AAM.SYSTEM STORY\n"
-"  cp2 set-attr disk.po AAM.SYSTEM type=SYS aux=0x2000\n"
-"\n"
-"Requirements\n"
-"------------\n"
-"\n"
-"64 kB and ProDOS 8.  The interpreter identifies the machine at boot\n"
-"and adapts to it.\n"
-"\n"
-"  Apple ][ / ][+       40 columns, upper case\n"
-"  //e / //c / IIgs     80 columns when an 80-column card is present,\n"
-"                       40 columns otherwise\n"
-"  128 kB machines      undo, kept in auxiliary memory\n"
-"\n"
-"On a 128 kB machine the ProDOS RAM disk is disconnected at startup,\n"
-"because the undo history lives where /RAM would.\n";
+;
 
 void bundle_apple2(char *dirname) {
 	visit_chunks(storyname, sizeof(storyname), 0);
