@@ -2,9 +2,7 @@
 ;
 ; Designed for the xa65 assembler.
 ;
-; https://prodos8.com/docs/techref/memory-use/
-;
-; One binary for the whole family.  The
+; One binary for the whole ][ family.  The
 ; machine is identified at boot from the
 ; ProDOS global page, and the screen width,
 ; the character set and the use of auxiliary
@@ -66,6 +64,11 @@
 ; DEFWIDTH only feeds initengine0; coldstart
 ; overwrites screenw with the detected width
 ; immediately afterwards.
+;
+; See also:
+;   https://prodos8.com/docs/techref/memory-use/
+;   https://savagetaylor.com/til/TA33130.html
+;
 
 DEFWIDTH	= 80
 
@@ -101,6 +104,7 @@ WNDWDTH		= $21
 WNDTOP		= $22
 WNDBTM		= $23
 CH		= $24
+OURCH		= 1403
 CV		= $25
 INVFLG		= $32
 
@@ -194,13 +198,65 @@ p_read		= $028e	; 8 bytes
 p_mark		= $0296	; 5 bytes
 p_quit		= $029b	; 7 bytes
 
-	* = $0800
+; ProDOS loads a SYS file at $2000 and jumps
+; there, but the interpreter has to run at
+; $0800 -- leaving it at $2000 costs 6 kB of
+; page cache, which is more than a large
+; story can spare.
+; First, we move the mover to $300...
+
+	* = $2000
+	.(
+	sei
+	cld
+	ldx	#moverlen
+copy
+	lda	mover,x
+	sta	$0300,x
+	dex
+	bpl	copy
+
+	jmp	$0300
+	.)
+
+; Then we run the mover at $300
+mover
+	.(
+	lda	#<bootcode
+	sta	$00
+	lda	#>bootcode
+	sta	$01		; source = bootcode
+
+	lda	#$00
+	sta	$02
+	lda	#$08
+	sta	$03		; dest = $0800
+
+	ldx	#SAFEPG-$8
+pageloop
+	ldy	#0
+byteloop
+	lda	($00),y
+	sta	($02),y
+	iny
+	bne	byteloop
+
+	inc	$01
+	inc	$03
+	dex
+	bne	pageloop
+	.)
 
 	jmp	coldstart
 
+bootcode = *
+moverlen = * - mover
+
 ; =====================================
-; Main text area
+; Main code
 ; =====================================
+
+	* = $0800
 
 do_foldup
 	.(
@@ -351,8 +407,7 @@ io_mstyle
 	pha
 	jsr	io_mflush
 	pla
-	lsr
-	and	#3		; bold and italic
+	and	#6		; bold and italic
 	beq	normal
 
 	jmp	set_inverse
@@ -412,6 +467,10 @@ io_sprepare
 	sta	statush
 
 	lda	CH
+	bit	col80
+	bpl	noourch
+	lda	OURCH
+noourch
 	sta	savedch
 	lda	cury
 	sta	savedcv
@@ -765,6 +824,8 @@ gotoxy
 
 	.(
 	stx	CH
+; https://www.atarimagazines.com/compute/issue76/Feedback_3.php
+	stx	OURCH	; synchronize CH and OURCH
 	sty	CV
 	jmp	VTAB
 	.)

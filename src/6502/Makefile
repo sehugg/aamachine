@@ -30,17 +30,10 @@ decruncher.bin:		decruncher.s
 c64_crunched.bin:	c64_frontend.bin decruncher.bin cruncher
 			./cruncher $< decruncher.bin >$@
 
-# Apple II.  One binary covers the whole family; it works out the screen
-# width and the amount of memory at boot.  The payload is assembled to run
-# at $0800, but ProDOS loads SYS files at $2000, so a one-page relocator is
-# prepended.  It needs to know how much to move, hence the size computation.
-
 a2_frontend.bin:	a2_frontend.s engine.s
 			xa -l a2.labels -o $@ $< -DUNDO=1 -DSAVERESTORE=0 -DVERSION=\"$(VERSION)\"
 
-a2.system:		a2_frontend.bin a2_boot.s
-			xa -o a2_boot.bin a2_boot.s \
-				-DPAYLOADPAGES=$$(( ($$(wc -c <a2_frontend.bin) + 255) / 256 ))
-			cat a2_boot.bin a2_frontend.bin >$@
+a2.system:		a2_frontend.bin
+			cat a2_frontend.bin >$@
 
 .PHONY: all clean
