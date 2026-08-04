@@ -52,15 +52,14 @@
 ; Auxiliary memory, when there is any
 ; =====================================
 ;  0400 - 07ff	80-column text page
-;  0800 - 3fff  additional page cache (TODO)
-;  4000 - beff	undo ring
+;  0800 - 87ff  additional page cache
+;  8800 - beff	undo ring
 ;
-; The undo ring deliberately starts at $4000.
-; The 80STORE soft switch remaps $0400-$07ff
+; TODO The 80STORE soft switch remaps $0400-$07ff
 ; and $2000-$3fff, so staying above both
 ; ranges means the ROM move routine works
 ; whatever the video firmware has left the
-; switches set to.
+; switches set to?
 
 ; DEFWIDTH only feeds initengine0; coldstart
 ; overwrites screenw with the detected width
@@ -70,6 +69,10 @@
 ;   https://prodos8.com/docs/techref/memory-use/
 ;   https://savagetaylor.com/til/TA33130.html
 ;
+; TODO
+; * save/load
+; * inverse mode sometimes seems confused in 80 column
+; * 2-disk mode - "STORY-xx-yy"
 
 DEFWIDTH	= 80
 
@@ -129,8 +132,14 @@ FILEBUF		= $bb00
 
 ; ---- auxiliary memory ----
 
-AUXLO		= $4000
-AUXHI		= $bf00
+AUXCACHESTART	= $800
+AUXCACHEPAGES	= $80
+
+AUXCACHELO	= $300		; virtual page # for each aux cache page
+AUXCACHEHI	= $380
+
+AUXUNDOLO		= $8800
+AUXUNDOHI		= $beff	; TODO inclusive
 
 ; ---- frontend zero page ----
 
@@ -176,7 +185,7 @@ mvbuf		= $0270	; 8, AUXMOVE zero-page save
 
 ; Undo ring bookkeeping.  Snapshots are all
 ; the same size, so the ring is a plain array
-; of slots between AUXLO and AUXHI.
+; of slots between AUXUNDOLO and AUXUNDOHI.
 
 u_next		= $0278	; word, where the next
 			; snapshot goes
@@ -885,10 +894,10 @@ io_restart
 	lda	#0
 	sta	u_count
 
-	lda	#<AUXLO
+	lda	#<AUXUNDOLO
 	sta	u_next+0
 	sta	u_old+0
-	lda	#>AUXLO
+	lda	#>AUXUNDOLO
 	sta	u_next+1
 	sta	u_old+1
 	rts
@@ -943,7 +952,7 @@ io_load
 ; =====================================
 
 ; Snapshots go into a ring of equal-sized
-; slots between AUXLO and AUXHI.  The engine
+; slots between AUXUNDOLO and AUXUNDOHI.  The engine
 ; asks for the same size every time, so the
 ; layout is computed once, on the first save.
 
@@ -1111,12 +1120,12 @@ undoinit
 	sta	u_max
 	sta	u_count
 
-	lda	#<AUXLO
+	lda	#<AUXUNDOLO
 	sta	u_tmp+0
 	sta	u_last+0
 	sta	u_next+0
 	sta	u_old+0
-	lda	#>AUXLO
+	lda	#>AUXUNDOLO
 	sta	u_tmp+1
 	sta	u_last+1
 	sta	u_next+1
@@ -1131,11 +1140,11 @@ loop
 	sta	u_end+1
 	bcs	done
 
-	; the slot has to end at or below AUXHI
+	; the slot has to end at or below AUXUNDOHI
 
-	lda	#<AUXHI
+	lda	#<AUXUNDOHI
 	cmp	u_end+0
-	lda	#>AUXHI
+	lda	#>AUXUNDOHI
 	sbc	u_end+1
 	bcc	done
 
@@ -1179,9 +1188,9 @@ undoadv
 	sbc	u_end+1
 	bcs	store
 
-	lda	#<AUXLO
+	lda	#<AUXUNDOLO
 	sta	u_end+0
-	lda	#>AUXLO
+	lda	#>AUXUNDOLO
 	sta	u_end+1
 store
 	lda	u_end+0
@@ -1205,9 +1214,9 @@ undoback
 	bcc	wrap
 
 	lda	u_end+0
-	cmp	#<AUXLO
+	cmp	#<AUXUNDOLO
 	lda	u_end+1
-	sbc	#>AUXLO
+	sbc	#>AUXUNDOLO
 	bcs	store
 wrap
 	lda	u_last+0
@@ -1259,21 +1268,21 @@ undomove
 	bit	u_dir
 	bmi	toaux
 
-	lda	u_tmp+0
+	lda	u_tmp+0		; src in aux
 	sta	A1+0
 	lda	u_tmp+1
 	sta	A1+1
-	lda	ioparam+0
+	lda	ioparam+0	; dest in main
 	sta	A4+0
 	lda	ioparam+1
 	sta	A4+1
 	jmp	setend
 toaux
-	lda	ioparam+0
+	lda	ioparam+0	; src in main
 	sta	A1+0
 	lda	ioparam+1
 	sta	A1+1
-	lda	u_tmp+0
+	lda	u_tmp+0		; dest in aux
 	sta	A4+0
 	lda	u_tmp+1
 	sta	A4+1
@@ -1315,6 +1324,49 @@ io_readpage
 	.(
 	stx	rp_page
 
+	; do we have it in aux cache?
+	bit	col80
+	bpl	noloadfromaux
+	; check aux cache table for virtual page #
+	lda	ioparam
+	and	#AUXCACHEPAGES-1
+	tay
+	lda	ioparam
+	cmp	AUXCACHELO,y
+	bne	noloadfromaux
+	lda	ioparam+1
+	cmp	AUXCACHEHI,y
+	bne	noloadfromaux
+
+	; we have it, transfer page from aux cache
+	jsr	saveauxregs
+	lda	#0
+	sta	A1+0
+	sta	A4+0
+	tya			; y is preserved
+	clc
+	adc	#>AUXCACHESTART
+	sta	A1+1		; src in aux
+	sta	A2+1		; src end in aux
+	lda	rp_page
+	sta	A4+1		; dest in main
+	; A2 = A1 + size - 1, inclusive
+	lda	#$ff
+	sta	A2+0		; src ending addr
+	clc			; aux -> main
+	jsr	AUXMOVE
+	jsr	restoreauxregs
+
+;	lda	ioparam
+;	jsr	PRBYTE
+;	lda	ioparam+1
+;	jsr	PRBYTE
+;	lda	#$a0
+;	jsr	COUT
+
+	jmp	nosaveinaux	; page is loaded
+
+noloadfromaux
 	; byte position = virtual page << 8
 
 	lda	#0
@@ -1341,8 +1393,43 @@ io_readpage
 	jsr	mlicall
 	bcs	err
 
-	; TODO: if prefilling, store in aux memory
+	; store in aux memory
+	bit	col80
+	bpl	nosaveinaux
 
+	jsr	saveauxregs
+	lda	#0
+	sta	A1+0
+	sta	A4+0
+	lda	ioparam
+	and	#AUXCACHEPAGES-1
+	tax
+	clc
+	adc	#>AUXCACHESTART
+	sta	A4+1		; dest in aux
+
+	lda	ioparam
+	sta	AUXCACHELO,x	; store virtual page # for this aux cache slot
+	lda	ioparam+1
+	sta	AUXCACHEHI,x
+
+	lda	rp_page
+	sta	A1+1		; src in main
+	sta	A2+1		; src end in main
+	; A2 = A1 + size - 1, inclusive
+	lda	#$ff
+	sta	A2		; src ending addr
+	sec			; main -> aux
+	jsr	AUXMOVE
+	jsr	restoreauxregs
+;	lda	ioparam
+;	jsr	PRBYTE
+;	lda	ioparam+1
+;	jsr	PRBYTE
+;	lda	#$a0
+;	jsr	COUT
+
+nosaveinaux
 	lda	rp_page
 	rts
 err
@@ -1527,6 +1614,14 @@ zsblp
 	sta	$bf58+initengine0/$800,x
 	dex
 	bpl	zsblp
+
+	; clear the aux cache lookup table
+	lda	#$ff
+	ldx	#AUXCACHEPAGES
+auxclrlp
+	sta	AUXCACHEHI-1,x
+	dex
+	bne	auxclrlp
 
 	; initengine0 has just set screenw from
 	; DEFWIDTH; the real width is whatever

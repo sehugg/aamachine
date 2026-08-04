@@ -130,11 +130,6 @@ void usage(char *prgname) {
 	fprintf(stderr, "c64               Directory with c64 disk image.\n");
 	fprintf(stderr, "apple2            Directory with ProDOS interpreter and story file.\n");
 	fprintf(stderr, "web:story         Just story.js for the web interpreter.\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "The apple2 target emits the two files that belong on a ProDOS\n");
-	fprintf(stderr, "disk, rather than a disk image, because a bootable volume needs\n");
-	fprintf(stderr, "the ProDOS boot blocks and kernel, which are Apple's and are not\n");
-	fprintf(stderr, "distributed with these tools.  See the readme.txt it writes.\n");
 	exit(1);
 }
 
