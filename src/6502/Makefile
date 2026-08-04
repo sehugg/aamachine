@@ -5,7 +5,7 @@ all:			aambox6502 aambox_frontend.bin c64_crunched.bin c64_drivecode.bin c64_loa
 
 clean:
 			rm -rf aambox6502 cruncher labels mkfont
-			rm -f a2_frontend.bin a2.labels a2_boot.bin a2.system
+			rm -f a2_frontend.bin a2.labels a2.system
 
 aambox6502:		aambox6502.c fake6502.c
 
