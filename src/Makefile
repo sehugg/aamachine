@@ -16,9 +16,6 @@ windows: aamrun.exe aamshow.exe aambundle.exe
 6502:
 	$(MAKE) -C 6502
 
-apple2:
-	$(MAKE) -C 6502 apple2
-
 tidy:
 	rm -f *.o
 
@@ -88,10 +85,10 @@ aambundle.exe: aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c \
 	table_play.h
 	${MINGW32} ${CFLAGS} -o $@ aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c
 
-table_a2terp.h:		apple2 6502/a2.system mkheader
+table_a2terp.h:		6502 6502/a2.system mkheader
 			./mkheader table_a2terp <6502/a2.system >$@
 
-table_a2license.h:	6502/a2_license.txt mkheader
+table_a2license.h:	6502 6502/a2_license.txt mkheader
 			./mkheader table_a2license <6502/a2_license.txt >$@
 
 table_c64license.h:	6502 6502/license.txt mkheader
@@ -124,4 +121,4 @@ table_jquery.h:		js/jquery-3.4.1.min.js mkheader
 table_play.h:		js/webfrontend.html mkheader
 			./mkheader table_play <$< >$@
 
-.PHONY:	all clean tidy install uninstall distclean windows 6502 apple2
+.PHONY:	all clean tidy install uninstall distclean windows 6502
