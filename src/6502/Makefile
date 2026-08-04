@@ -1,9 +1,7 @@
 VERSION=1.0.2
 CFLAGS=-Wall -O2 -DVERSION=\"$(VERSION)\"
 
-all:			aambox6502 aambox_frontend.bin c64_crunched.bin c64_drivecode.bin c64_loader.prg
-
-apple2:			a2.system
+all:			aambox6502 aambox_frontend.bin c64_crunched.bin c64_drivecode.bin c64_loader.prg a2.system
 
 clean:
 			rm -rf aambox6502 cruncher labels mkfont
@@ -45,4 +43,4 @@ a2.system:		a2_frontend.bin a2_boot.s
 				-DPAYLOADPAGES=$$(( ($$(wc -c <a2_frontend.bin) + 255) / 256 ))
 			cat a2_boot.bin a2_frontend.bin >$@
 
-.PHONY: all apple2 clean
+.PHONY: all clean

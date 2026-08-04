@@ -305,9 +305,13 @@ io_mline
 	jsr	io_mflush
 io_mline_raw
 	.(
+	ldx	xpos
+	dex
+	cpx	scrw	; signed cmp
+	bpl	nocr	; don't CR if we filled entire line
 	lda	#$8d
 	jsr	cout
-
+nocr
 	lda	#0
 	sta	xpos
 	sta	pendspc
@@ -356,6 +360,7 @@ normal
 	jmp	set_normal
 	.)
 
+; TODO use MouseText?
 io_mprogress
 	; input x = progress
 	; input y = total
@@ -563,7 +568,7 @@ loop
 	ldx	xpos
 	ldy	cury
 	jsr	gotoxy
-	jsr	set_normal	; do we have to restore?
+	jsr	set_normal	; do we have to restore old value?
 	rts
 	.)
 
@@ -759,56 +764,9 @@ gotoxy
 	; input x = column, y = row
 
 	.(
-	bit	col80
-	bmi	firmware
-
 	stx	CH
 	sty	CV
 	jmp	VTAB
-firmware
-	lda	#25	; move to (0,0)
-	jsr	cout
-	cpy	#0
-	beq	noy
-fwy
-	lda	#10	; move down
-	jsr	cout
-	dey
-	bne	fwy
-noy
-	cpx	#0
-	beq	nox
-fwx
-	lda	#28	; move right
-	jsr	cout
-	dex
-	bne	fwx
-nox
-	rts
-
-	; the firmware GOTOXY escape --
-	; ctrl-^ then (col+32), (row+32).
-	; cout uses coutx and couty as its own
-	; scratch, so the stack holds these.
-/*
-	tya
-	pha
-	txa
-	pha
-
-	lda	#30
-	jsr	cout
-
-	pla
-	clc
-	adc	#32
-	jsr	cout
-
-	pla
-	clc
-	adc	#32
-	jmp	cout
-*/
 	.)
 
 set_inverse
@@ -841,6 +799,8 @@ firmware
 ; System
 ; =====================================
 
+;; TODO ProDOS thinks the system is corrupted?
+;; "RESTART SYSTEM-$0B"
 io_quit
 	.(
 	jsr	set_normal
@@ -899,6 +859,7 @@ io_save
 	; output c = success
 
 	.(
+	; TODO
 	clc
 	rts
 	.)
@@ -910,6 +871,7 @@ io_load
 	; otherwise, clear c
 
 	.(
+	; TODO
 	clc
 	rts
 	.)
@@ -1479,8 +1441,7 @@ NTRANS = trlo-trhi
 
 coldstart
 	.(
-; Apple ][ boot doesn't init all zero page
-; so we do it here
+; Apple ][ boot doesn't clear all zero page so we do it here
 	lda	#0
 	ldx	#$c0
 clrlp
