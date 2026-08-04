@@ -80,7 +80,9 @@
 ;
 ; TODO
 ; - save/load
+; - Impossible Stairs .aastory doesn't work
 ; - inverse mode sometimes seems confused in 80 column
+;   (but styles are turned off for now except for status)
 ; - 2-disk mode - "STORY-xx-yy"
 ; - use the packer instead of boot mover
 ; - RWTS18 non-ProDOS verison using lang card RAM
@@ -91,7 +93,7 @@ PREXTRA		= 2
 PRSHIFT		= 0
 HAVE_QUIT	= 0	; we don't have BASIC.SYSTEM
 HAVE_STATUS	= 1
-HAVE_STYLE	= 1
+HAVE_STYLE	= 0
 
 TRACE_INST	= 0
 TRACE_STORE	= 0
@@ -421,9 +423,11 @@ io_mclear
 	rts
 	.)
 
+	; TODO some bugs in 80-column mode
 io_mstyle
+	rts
 	; input a = style bits
-
+	/*
 	.(
 	pha
 	jsr	io_mflush
@@ -435,6 +439,7 @@ io_mstyle
 normal
 	jmp	set_normal
 	.)
+	*/
 
 ; TODO use MouseText?
 io_mprogress
