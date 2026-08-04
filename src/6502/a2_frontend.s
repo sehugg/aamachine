@@ -94,7 +94,7 @@ SLOT3		= $c300
 CSW		= $36
 A1		= $3c
 A2		= $3e
-A4		= $3a
+A4		= $42
 
 WNDLFT		= $20
 WNDWDTH		= $21
@@ -1589,7 +1589,7 @@ notplus
 	sta	scrw
 no80
 	lda	MACHID
-	and	#$30
+	and	#$20
 	cmp	#$20
 	bne	done
 
@@ -1713,13 +1713,6 @@ banner
 	ldy	#>txt_banner
 	jsr	putstr
 
-	bit	auxram
-	bpl	done
-
-	ldx	#<txt_128k
-	ldy	#>txt_128k
-	jsr	putstr
-done
 	jsr	io_mline
 	jmp	io_mline
 	.)
@@ -1779,9 +1772,6 @@ txt_banner
 	.asc	"Aa-machine "
 	.asc	VERSION
 	.asc	0
-
-txt_128k
-	.asc	", 128K",0
 
 txt_nostory
 	.asc	"Cannot open STORY.",10,0
