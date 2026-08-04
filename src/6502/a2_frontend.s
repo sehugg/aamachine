@@ -52,6 +52,7 @@
 ; Auxiliary memory, when there is any
 ; =====================================
 ;  0400 - 07ff	80-column text page
+;  0800 - 3fff  additional page cache (TODO)
 ;  4000 - beff	undo ring
 ;
 ; The undo ring deliberately starts at $4000.
@@ -1221,6 +1222,28 @@ store
 	rts
 	.)
 
+saveauxregs
+	.(
+	ldx	#7
+save
+	lda	A1,x
+	sta	mvbuf,x
+	dex
+	bpl	save
+	rts
+	.)
+
+restoreauxregs
+	.(
+	ldx	#7
+restore
+	lda	mvbuf,x
+	sta	A1,x
+	dex
+	bpl	restore
+	rts
+	.)
+
 undomove
 	; input u_tmp = address in aux memory
 	; input ioparam = address in main memory
@@ -1231,12 +1254,7 @@ undomove
 	; engine, so that range is saved.
 
 	.(
-	ldx	#7
-save
-	lda	A1,x
-	sta	mvbuf,x
-	dex
-	bpl	save
+	jsr	saveauxregs
 
 	bit	u_dir
 	bmi	toaux
@@ -1282,13 +1300,7 @@ setend
 	asl			; bit 7 to carry
 	jsr	AUXMOVE
 
-	ldx	#7
-restore
-	lda	mvbuf,x
-	sta	A1,x
-	dex
-	bpl	restore
-	rts
+	jmp	restoreauxregs
 	.)
 
 ; =====================================
@@ -1323,20 +1335,13 @@ io_readpage
 	jsr	mlicall
 	bcs	err
 
-	; zero system bitmap to unprotect the unused parts of
-	; the current program if loaded as system pgm (TODO)
-	lda	#0
-	ldx	#16	; is enough pages?
-lplp
-	sta	$bf58+initengine0/$800,x
-	dex
-	bpl	lplp
-
 	lda	#$ca		; READ
 	ldx	#<p_read
 	ldy	#>p_read
 	jsr	mlicall
 	bcs	err
+
+	; TODO: if prefilling, store in aux memory
 
 	lda	rp_page
 	rts
@@ -1513,6 +1518,15 @@ clrlp
 	jsr	initsystem
 
 	jsr	initengine0
+
+	; zero system bitmap to unprotect the unused parts of
+	; the current program if loaded as system pgm (TODO)
+	lda	#0
+	ldx	#16	; is enough pages?
+zsblp
+	sta	$bf58+initengine0/$800,x
+	dex
+	bpl	zsblp
 
 	; initengine0 has just set screenw from
 	; DEFWIDTH; the real width is whatever
