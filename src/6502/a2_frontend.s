@@ -1,9 +1,9 @@
 ; Apple II (ProDOS) Aa-machine frontend.
-;
 ; Designed for the xa65 assembler.
 ;
-; One binary for the whole ][ family.  The
-; machine is identified at boot from the
+; ProDOS Version:
+;
+; The machine is identified at boot from the
 ; ProDOS global page, and the screen width,
 ; the character set and the use of auxiliary
 ; memory follow from that.
@@ -31,14 +31,14 @@
 ; You can put the entire story file into a single
 ; file called STORY on the main disk, but this limits
 ; you to about 100 KB size story files.
-;
-; ProDOS isn't very memory-efficient, as it takes up the
-; entire 16 KB language card and 1 KB of RAM per open file.
-; However it supports a diverse set of disk devices:
 ; On Apple IIGS you can use 800 KB disk images, and on
 ; emulators you can use up to 32 MB.
 ;
-; Main memory map
+; ProDOS isn't very memory-efficient, as it takes up the
+; entire 16 KB language card and 1 KB of RAM per open file.
+; Many games require too much heap space and will crash.
+;
+; Main memory map (ProDOS)
 ; =====================================
 ;  0000 - 001f	frontend zero page
 ;  0020 - 002b	Monitor text variables
@@ -64,9 +64,21 @@
 ;  0800 - 87ff  aux page cache
 ;  8800 - beff	aux undo ring
 ;
+; RWTS18 Version (TODO):
+;
+; This version will open up the 16K of language card memory,
+; making larger-footprint games possible. It uses the
+; RWTS18 disk format, giving you 161,280 bytes of disk.
+;
+; Main memory map (RWTS18)
+; =====================================
+;  0800 -~1000	interpreter code
+;  1000 - bfff  page buffers / dynamic data
+;  d000 - ffff  interpreter code
+;
 ; TODO The 80STORE soft switch remaps $0400-$07ff
 ; and $2000-$3fff, so staying above both
-; ranges means the ROM move routine works
+
 ; whatever the video firmware has left the
 ; switches set to?
 
@@ -86,6 +98,7 @@
 ; - 2-disk mode - "STORY-xx-yy"
 ; - use the packer instead of boot mover
 ; - RWTS18 non-ProDOS verison using lang card RAM
+; - use AUX memory more
 
 DEFWIDTH	= 80
 
@@ -131,17 +144,6 @@ CLR80STORE	= $c000
 CLR80COL	= $c00c
 ALTCHRSET_OFF	= $c00e
 ALTCHRSET_ON	= $c00f
-
-; ---- ProDOS ----
-
-MLI		= $bf00
-DEVADR		= $bf10
-DEVCNT		= $bf31
-DEVLST		= $bf32
-MEMBITMAP	= $bf58
-MACHID		= $bf98
-
-FILEBUF		= $bb00
 
 ; ---- auxiliary memory ----
 
@@ -194,7 +196,8 @@ auxram		= $1f	; $80 if aux RAM is usable
 
 wrapbuf		= $0200	; 80 bytes
 zpbuf		= $0250	; 32, MLI zero-page save
-mvbuf		= $0270	; 8, AUXMOVE zero-page save
+
+auxregsbuf	= $0270	; AUXMOVE zero-page save
 
 ; Undo ring bookkeeping.  Snapshots are all
 ; the same size, so the ring is a plain array
@@ -212,6 +215,12 @@ u_count		= $0285	; snapshots stored
 u_ready		= $0286	; nonzero once sized
 u_dir		= $0287	; $80 = main to aux
 
+#if PRODOS || PRORWTS
+MACHID		= $bf98
+#endif
+
+#if PRODOS
+
 ; MLI parameter blocks have to survive into
 ; the run, so they live down here rather than
 ; in the init segment.
@@ -221,14 +230,50 @@ p_read		= $028e	; 8 bytes
 p_mark		= $0296	; 5 bytes
 p_quit		= $029b	; 7 bytes
 
+MLI		= $bf00
+DEVADR		= $bf10
+DEVCNT		= $bf31
+DEVLST		= $bf32
+FILEBUF		= $bb00
+
+#endif
+
+#if PRORWTS
+next_rpagelo	= $029e
+next_rpagehi	= $029f
+rwregsbuf	= $02a0	; PRORWTS zero-page save
+
+rwregs_first	= $3b
+rwregs_last	= $67
+rwregs_count	= rwregs_last - rwregs_first + 1
+
+prorwts_zp = $50
+prorwts_status	= prorwts_zp+0
+prorwts_auxreq	= prorwts_zp+1
+prorwts_sizelo	= prorwts_zp+2
+prorwts_sizehi	= prorwts_zp+3
+prorwts_reqcmd	= prorwts_zp+4
+prorwts_ldrlo	= prorwts_zp+5
+prorwts_ldrhi	= prorwts_zp+6
+prorwts_namlo	= prorwts_zp+7
+prorwts_namhi	= prorwts_zp+8
+
+prorwts_reloc    = $d000
+prorwts_rdwrpart = prorwts_reloc + 0
+prorwts_opendir	 = prorwts_reloc + 3
+#endif
+
 ; ProDOS loads a SYS file at $2000 and jumps
 ; there, but the interpreter has to run at
 ; $0800 -- leaving it at $2000 costs 6 kB of
 ; page cache, which is more than a large
 ; story can spare.
-; First, we move the mover to $300...
 
 	* = $2000
+#if PRODOS || PRORWTS
+
+; First, we move the mover to $300...
+
 	.(
 	sei
 	cld
@@ -274,6 +319,8 @@ byteloop
 
 bootcode = *
 moverlen = * - mover
+
+#endif
 
 ; =====================================
 ; Main code
@@ -890,6 +937,7 @@ firmware
 ;; "RESTART SYSTEM-$0B"
 io_quit
 	.(
+#if PRODOS
 	jsr	set_normal
 	jsr	io_mline
 
@@ -897,6 +945,7 @@ io_quit
 	ldx	#<p_quit
 	ldy	#>p_quit
 	jsr	mlicall
+#endif
 halt
 	jmp	halt
 	.)
@@ -1247,27 +1296,37 @@ store
 	rts
 	.)
 
-saveauxregs
+swapauxregs
 	.(
 	ldx	#7
 save
 	lda	A1,x
-	sta	mvbuf,x
+	pha
+	lda	auxregsbuf,x
+	sta	A1,x
+	pla
+	sta	auxregsbuf,x
 	dex
 	bpl	save
 	rts
 	.)
 
-restoreauxregs
+#if PRORWTS
+swaprwregs
 	.(
-	ldx	#7
-restore
-	lda	mvbuf,x
-	sta	A1,x
+	ldx	#rwregs_count-1
+save
+	lda	rwregs_first,x
+	pha
+	lda	rwregsbuf,x
+	sta	rwregs_first,x
+	pla
+	sta	rwregsbuf,x
 	dex
-	bpl	restore
+	bpl	save
 	rts
 	.)
+#endif
 
 undomove
 	; input u_tmp = address in aux memory
@@ -1279,7 +1338,7 @@ undomove
 	; engine, so that range is saved.
 
 	.(
-	jsr	saveauxregs
+	jsr	swapauxregs
 
 	bit	u_dir
 	bmi	toaux
@@ -1325,7 +1384,7 @@ setend
 	asl			; bit 7 to carry
 	jsr	AUXMOVE
 
-	jmp	restoreauxregs
+	jmp	swapauxregs
 	.)
 
 ; =====================================
@@ -1355,7 +1414,7 @@ io_readpage
 	bne	noloadfromaux
 
 	; we have it, transfer page from aux cache
-	jsr	saveauxregs
+	jsr	swapauxregs
 	lda	#0
 	sta	A1+0
 	sta	A4+0
@@ -1371,29 +1430,21 @@ io_readpage
 	sta	A2+0		; src ending addr
 	clc			; aux -> main
 	jsr	AUXMOVE
-	jsr	restoreauxregs
-
-;	lda	ioparam
-;	jsr	PRBYTE
-;	lda	ioparam+1
-;	jsr	PRBYTE
-;	lda	#$a0
-;	jsr	COUT
+	jsr	swapauxregs
 
 	jmp	nosaveinaux	; page is loaded
 
 noloadfromaux
 	; byte position = virtual page << 8
-
+#if PRODOS
 	lda	#0
 	sta	p_mark+2
+	sta	p_read+2
 	lda	ioparam
 	sta	p_mark+3
 	lda	ioparam+1
 	sta	p_mark+4
 
-	lda	#0
-	sta	p_read+2
 	lda	rp_page
 	sta	p_read+3
 
@@ -1408,12 +1459,100 @@ noloadfromaux
 	ldy	#>p_read
 	jsr	mlicall
 	bcs	err
+#endif
+
+#if PRORWTS
+	jsr	swaprwregs
+
+; are we seeking backwards? if so rewind
+	lda	ioparam+1
+	cmp	next_rpagehi
+	bcc	rewind
+	lda	ioparam
+	cmp	next_rpagelo
+	bcc	rewind
+; if last = current, don't even seek
+	bne	norewind
+	lda	ioparam+1
+	cmp	next_rpagehi
+	beq	noseek
+
+pages = f_temp
+; be kind, rewind
+rewind
+#ifdef DEBUG
+	lda	#$41
+	jsr	cout
+#endif
+	lda     #0
+        sta     $5f ; blkidx
+        sta     $63 ; blkofflo
+        sta     $64 ; blkoffhi
+        sta     $5b ; treeidx (TODO set B >> 8)
+	sta	next_rpagelo
+	sta	next_rpagehi
+norewind
+#ifdef DEBUG
+	lda	#$42
+	jsr	cout
+#endif
+	lda	ioparam
+	sec
+	sbc	next_rpagelo
+	sta	prorwts_sizehi
+#ifdef DEBUG
+	jsr	PRBYTE
+#endif
+        lda     #0	; cmdseek
+        sta     prorwts_reqcmd
+        sta     prorwts_sizelo
+        lda	$C08B		; lc_bank=1  (use $C083 for lc_bank=2) — read twice
+        lda	$C08B
+        jsr     prorwts_rdwrpart
+        lda	$C081		; ROMIN
+noseek
+	lda     rp_page
+	sta	prorwts_ldrhi
+        lda     #1	;cmdread
+        sta     prorwts_reqcmd
+        sta     prorwts_sizehi
+        lda     #0
+        sta     prorwts_sizelo
+	sta	prorwts_ldrlo
+        lda	$C08B		; lc_bank=1  (use $C083 for lc_bank=2) — read twice
+        lda	$C08B
+        jsr     prorwts_rdwrpart
+        lda	$C081		; ROMIN
+
+	ldy	prorwts_status
+	jsr	swaprwregs
+	tya
+	bne	err
+
+	lda	ioparam
+	clc
+	adc	#1
+	sta	next_rpagelo
+	lda	ioparam+1
+	adc	#0
+	sta	next_rpagehi
+#ifdef DEBUG
+	lda	ioparam+1
+	jsr	PRBYTE
+	lda	ioparam
+	jsr	PRBYTE
+	lda	$5f - rwregs_first + rwregsbuf
+	jsr	PRBYTE
+	lda	#$a0
+	jsr	COUT1
+#endif
+#endif
 
 	; store in aux memory
 	bit	col80
 	bpl	nosaveinaux
 
-	jsr	saveauxregs
+	jsr	swapauxregs
 	lda	#0
 	sta	A1+0
 	sta	A4+0
@@ -1437,7 +1576,7 @@ noloadfromaux
 	sta	A2		; src ending addr
 	sec			; main -> aux
 	jsr	AUXMOVE
-	jsr	restoreauxregs
+	jsr	swapauxregs
 ;	lda	ioparam
 ;	jsr	PRBYTE
 ;	lda	ioparam+1
@@ -1452,6 +1591,7 @@ err
 	jmp	diskerror
 	.)
 
+#if PRODOS
 ; =====================================
 ; ProDOS glue
 ; =====================================
@@ -1507,6 +1647,7 @@ nodev
 	lda	#$28		; no device connected
 	sec
 	rts
+#endif
 
 diskerror
 	.(
@@ -1521,10 +1662,12 @@ diskerror
 	jsr	PRBYTE	; print some debugging info
 	lda	ioparam
 	jsr	PRBYTE
+#if PRODOS
 	lda	p_read+3
 	jsr	PRBYTE
 	lda	p_read+2
 	jsr	PRBYTE
+#endif
 halt
 	jmp	halt
 	.)
@@ -1610,6 +1753,11 @@ NTRANS = trlo-trhi
 
 coldstart
 	.(
+#if PRORWTS
+	jsr	prorwts2_init	; TODO check status?
+	jsr	swaprwregs	; load prorwts registers into save bank
+#endif
+
 	jsr	initsystem
 
 	jsr	initengine0
@@ -1674,8 +1822,10 @@ auxclrlp
 
 	jsr	detect
 	jsr	setupvideo
+#if PRODOS
 	jsr	initparms
 	jsr	removeram
+#endif
 	jsr	banner
 	jmp	openstory
 	.)
@@ -1773,6 +1923,8 @@ window
 	jmp	clrwin
 	.)
 
+#if PRODOS
+
 initparms
 	.(
 	ldx	#nparm-1
@@ -1822,6 +1974,7 @@ last
 	sta	DEVADR+$17
 	rts
 	.)
+#endif
 
 banner
 	.(
@@ -1833,6 +1986,7 @@ banner
 	jmp	io_mline
 	.)
 
+#if PRODOS
 openstory
 	.(
 	lda	#$c8		; OPEN
@@ -1879,6 +2033,44 @@ parmsrc
 	.byt	0
 	.word	0
 nparm = *-parmsrc
+#endif
+
+#if PRORWTS
+openstory
+	.(
+	jsr	swaprwregs
+        lda     #<pathname
+        sta     prorwts_namlo
+        lda     #>pathname
+        sta     prorwts_namhi
+	lda	#0
+	sta	prorwts_sizelo
+	sta	prorwts_ldrlo
+	sta	prorwts_sizehi
+	lda	#4		; TODO remove
+	sta	prorwts_ldrhi
+        lda	$C08B		; lc_bank=1  (use $C083 for lc_bank=2) — read twice
+        lda	$C08B
+        jsr	prorwts_opendir
+        lda	$C081		; ROMIN
+	; reset seek pos to 0
+	lda	#0
+	sta	$5f		;blkidx
+	; next page read will be 0
+	sta	next_rpagelo
+	sta	next_rpagehi
+	ldy	prorwts_status
+	jsr	swaprwregs
+	tya
+	bne	nofile
+	rts
+nofile
+	ldx	#<txt_nostory
+	ldy	#>txt_nostory
+	jsr	putstr
+	jmp	diskerror	; TODO
+	.)
+#endif
 
 pathname
 	.byt	5
@@ -1892,6 +2084,20 @@ txt_banner
 txt_nostory
 	.asc	"Cannot open STORY.",10,0
 
-SAFEPG = (* + $ff) >> 8
+#if PRODOS
 RAMEND = $bb00
+#endif
+#if PRORWTS
+RAMEND = $c000
+#endif
+
+; this library is at the end of the file
+#if PRORWTS
+prorwts2_init = *
+;	.bin	0,0,"a2_prorwts2.bin"
+SAFEPG = (* + $8ff) >> 8
+#endif
+#if PRODOS
+SAFEPG = (* + $ff) >> 8
+#endif
 SAVEADDR = SAFEPG << 8

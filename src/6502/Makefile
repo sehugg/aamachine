@@ -5,7 +5,7 @@ all:			aambox6502 aambox_frontend.bin c64_crunched.bin c64_drivecode.bin c64_loa
 
 clean:
 			rm -rf aambox6502 cruncher labels mkfont
-			rm -f a2_frontend.bin a2.labels a2.system
+			rm -f a2_frontend.bin a2_prorwts2.bin a2.labels a2.system
 
 aambox6502:		aambox6502.c fake6502.c
 
@@ -30,10 +30,19 @@ decruncher.bin:		decruncher.s
 c64_crunched.bin:	c64_frontend.bin decruncher.bin cruncher
 			./cruncher $< decruncher.bin >$@
 
-a2_frontend.bin:	a2_frontend.s engine.s
-			xa -l a2.labels -o $@ $< -DUNDO=1 -DSAVERESTORE=0 -DVERSION=\"$(VERSION)\"
+#a2_rwts18.bin:		a2_rwts18.s
+#			xa -XMASM -o $@ $<
 
-a2.system:		a2_frontend.bin
-			cat a2_frontend.bin >$@
+#a2_frontend.bin:	a2_frontend.s engine.s a2_rwts18.bin
+#			xa -l a2.labels -o $@ $< -DPRODOS=0 -DRWTS18=1 -DUNDO=1 -DSAVERESTORE=0 -DVERSION=\"$(VERSION)\"
+
+a2_prorwts2.bin:	a2_prorwts2.acme a2_frontend.bin
+			acme -DPRORWTS_ORG=$$(($$(wc -c < a2_frontend.bin) + 2048 - 53)) -l a2_prorwts2.sym -r a2_prorwts2.rpt $<
+
+a2_frontend.bin:	a2_frontend.s engine.s
+			xa -l a2.labels -o $@ $< -DPRODOS=0 -DPRORWTS=1 -DUNDO=1 -DSAVERESTORE=0 -DVERSION=\"$(VERSION)\"
+
+a2.system:		a2_frontend.bin a2_prorwts2.bin
+			cat a2_frontend.bin a2_prorwts2.bin > $@
 
 .PHONY: all clean
