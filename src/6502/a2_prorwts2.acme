@@ -33,7 +33,7 @@ ver_02 = 1
                 enable_format= 0        ;used only by RWTS mode, requires enable_write and fast_subindex
                 enable_seek  = 1        ;set to 1 to enable seek support
                                         ;seeking with aligned_read=1 requires non-zero offset
-                allow_multi  = 0        ;set to 1 to allow multiple floppies
+                allow_multi  = 1        ;set to 1 to allow multiple floppies
                 allow_zerovol= 1        ;set to 1 to support volume 0 (=last used volume)
                 check_chksum = 0        ;set to 1 to enforce checksum verification for floppies
                 allow_subdir = 0        ;set to 1 to allow opening subdirectories to access files
@@ -63,7 +63,7 @@ ver_02 = 1
                 return_size  = 0        ;set to 1 to receive file size on open in read-only mode
                 one_shot     = 0        ;set to 1 to load entire file in one pass (avoids the need to specify size)
                 no_interrupts= 1        ;set to 1 to disable interrupts across calls
-                detect_err   = 0        ;set to 1 to to detect errors in no_interrupts mode
+                detect_err   = 1        ;set to 1 to to detect errors in no_interrupts mode
                 swap_zp      = 0        ;set to 1 to include code to preserve zpage
                                         ;used only by RWTS mode
                 swap_scrn    = 0        ;set to 1 to preserve screen hole contents across SmartPort calls
