@@ -1,3 +1,4 @@
+#define DEBUG
 ; Apple II (ProDOS) Aa-machine frontend.
 ; Designed for the xa65 assembler.
 ;
@@ -1431,7 +1432,10 @@ io_readpage
 	clc			; aux -> main
 	jsr	AUXMOVE
 	jsr	swapauxregs
-
+#ifdef DEBUG
+	lda	#'C'
+	jsr	cout
+#endif
 	jmp	nosaveinaux	; page is loaded
 
 noloadfromaux
@@ -1463,25 +1467,26 @@ noloadfromaux
 
 #if PRORWTS
 	jsr	swaprwregs
-
-; are we seeking backwards? if so rewind
-	lda	ioparam+1
-	cmp	next_rpagehi
-	bcc	rewind
+seekoffset = f_temp
+; compute desired - next seek offset
+redoseek
 	lda	ioparam
-	cmp	next_rpagelo
-	bcc	rewind
-; if last = current, don't even seek
-	bne	norewind
+	sec
+	sbc	next_rpagelo
+	sta	seekoffset
 	lda	ioparam+1
-	cmp	next_rpagehi
-	beq	noseek
+	sbc	next_rpagehi
+	sta	seekoffset+1
+; are we seeking backwards? if so rewind
+	bmi	rewind		; negative, rewind
+	ora	seekoffset
+	beq	noseek		; equal, no seek
+	bne	norewind	; positive, no rewind
 
-pages = f_temp
 ; be kind, rewind
 rewind
 #ifdef DEBUG
-	lda	#$41
+	lda	#'R'
 	jsr	cout
 #endif
 	lda     #0
@@ -1491,21 +1496,41 @@ rewind
         sta     $5b ; treeidx (TODO set B >> 8)
 	sta	next_rpagelo
 	sta	next_rpagehi
+	beq	redoseek	; recompute desired - next
 norewind
 #ifdef DEBUG
-	lda	#$42
+	lda	#'S'
 	jsr	cout
-#endif
-	lda	ioparam
-	sec
-	sbc	next_rpagelo
-	sta	prorwts_sizehi
-#ifdef DEBUG
-	jsr	PRBYTE
 #endif
         lda     #0	; cmdseek
         sta     prorwts_reqcmd
         sta     prorwts_sizelo
+	lda	seekoffset+1
+	bpl	nobigseek
+; big seek = $ff00 bytes
+#ifdef DEBUG
+	lda	#'B'
+	jsr	cout
+#endif
+	lda	#$ff
+	sta	prorwts_sizehi
+	clc
+	adc	next_rpagelo
+	sta	next_rpagelo
+	lda	#0
+	adc	next_rpagehi
+	sta	next_rpagehi
+        lda	$C08B		; lc_bank=1  (use $C083 for lc_bank=2) — read twice
+        lda	$C08B
+        jsr     prorwts_rdwrpart
+        lda	$C081		; ROMIN
+	jmp	redoseek	; recompute
+nobigseek
+	lda	seekoffset
+	sta	prorwts_sizehi
+#ifdef DEBUG
+	jsr	PRBYTE
+#endif
         lda	$C08B		; lc_bank=1  (use $C083 for lc_bank=2) — read twice
         lda	$C08B
         jsr     prorwts_rdwrpart
@@ -1536,18 +1561,20 @@ noseek
 	lda	ioparam+1
 	adc	#0
 	sta	next_rpagehi
+#endif
+
 #ifdef DEBUG
 	lda	ioparam+1
 	jsr	PRBYTE
 	lda	ioparam
 	jsr	PRBYTE
+#if PRORWTS
 	lda	$5f - rwregs_first + rwregsbuf
 	jsr	PRBYTE
+#endif
 	lda	#$a0
 	jsr	COUT1
 #endif
-#endif
-
 	; store in aux memory
 	bit	col80
 	bpl	nosaveinaux
@@ -1577,12 +1604,6 @@ noseek
 	sec			; main -> aux
 	jsr	AUXMOVE
 	jsr	swapauxregs
-;	lda	ioparam
-;	jsr	PRBYTE
-;	lda	ioparam+1
-;	jsr	PRBYTE
-;	lda	#$a0
-;	jsr	COUT
 
 nosaveinaux
 	lda	rp_page
