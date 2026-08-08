@@ -1679,11 +1679,11 @@ diskerror
 	.(
 	pha
 	jsr	io_mline
-	ldx	#<txt_diskerr
-	ldy	#>txt_diskerr
-	jsr	putstr
+	lda	#'E'
+	jsr	cout
 	pla
 	jsr	PRBYTE	; print error code
+#ifdef DEBUG
 	lda	rp_page
 	jsr	PRBYTE	; print some debugging info
 	lda	ioparam
@@ -1694,44 +1694,14 @@ diskerror
 	lda	p_read+2
 	jsr	PRBYTE
 #endif
+#endif
 halt
 	jmp	halt
-	.)
-
-putstr
-	; input x/y = string, l/h
-	; plain ascii, nul terminated
-
-	.(
-	stx	strptr+0
-	sty	strptr+1
-	ldy	#0
-loop
-	sty	f_temp
-	lda	(strptr),y
-	beq	done
-
-	cmp	#10
-	bne	nonl
-
-	jsr	io_mline
-	jmp	next
-nonl
-	jsr	io_mputc
-next
-	ldy	f_temp
-	iny
-	bne	loop
-done
-	jmp	io_mflush
 	.)
 
 ; =====================================
 ; Resident data
 ; =====================================
-
-txt_diskerr
-	.asc	"DiskErr:",0
 
 ; Transliteration table.  Text mode draws
 ; from the character ROM, so anything outside
@@ -1811,6 +1781,34 @@ coldstart
 
 ; Everything from here on is overwritten by
 ; page buffers once the engine is running.
+
+putstr
+	; input x/y = string, l/h
+	; plain ascii, nul terminated
+
+	.(
+	stx	strptr+0
+	sty	strptr+1
+	ldy	#0
+loop
+	sty	f_temp
+	lda	(strptr),y
+	beq	done
+
+	cmp	#10
+	bne	nonl
+
+	jsr	io_mline
+	jmp	next
+nonl
+	jsr	io_mputc
+next
+	ldy	f_temp
+	iny
+	bne	loop
+done
+	jmp	io_mflush
+	.)
 
 initsystem
 	.(
