@@ -398,6 +398,12 @@ ext
 	jmp	clrupper
 	.)
 
+#ifdef A2_ENGINE_HIMEM
+engine_reloc = *
+* = $d000
+himem_start = *
+#endif
+
 vio_line
 	.(
 	lda	rspc
@@ -585,7 +591,7 @@ initengine5
 	.)
 
 	.(
-	lda	#>initsegment
+	lda	#>initsegment+$ff
 	sta	firstpg
 	.)
 
@@ -9408,6 +9414,11 @@ optable
 	.word	op_trace	; 7f
 
 engine_footprint = *-engine_firstaddr
+
+#ifdef A2_ENGINE_HIMEM
+himem_end = *
+* = engine_reloc
+#endif
 
 ;======================================
 initsegment
