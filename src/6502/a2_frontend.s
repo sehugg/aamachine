@@ -65,6 +65,7 @@
 ;  0400 - 07ff	80-column text page
 ;  0800 - 87ff  aux page cache
 ;  8800 - beff	aux undo ring
+; TODO: bigger aux page cache
 ;
 ; ProRWTS2 Version:
 ;
@@ -121,12 +122,11 @@ TRACE_STORE	= 0
 
 COUT		= $fded
 COUT1		= $fdf0
-VIDOUT		= $fbfd
 HOME		= $fc58
 VTAB		= $fc22
 SETTXT		= $fb39
 PRBYTE		= $fdda
-IDROUTINE	= $fe1f		; rts, except on a IIgs
+
 AUXMOVE		= $c311
 SLOT3		= $c300
 
@@ -227,6 +227,9 @@ MACHID		= $bf98
 
 #if PRODOS
 
+#define ROMCALL(addr)		jsr addr
+#define ROMTAILCALL(addr)	jmp addr
+
 ; MLI parameter blocks have to survive into
 ; the run, so they live down here rather than
 ; in the init segment.
@@ -245,6 +248,12 @@ FILEBUF		= $bb00
 #endif
 
 #if PRORWTS
+
+#define A2_ENGINE_HIMEM		; some of engine gets put at $d000-$ffff
+
+#define ROMCALL(addr)		bit $c082:jsr addr:bit $c088
+#define ROMTAILCALL(addr)	ROMCALL(addr):rts
+
 next_rpagelo	= $029e
 next_rpagehi	= $029f
 rwregsbuf	= $02a0	; PRORWTS zero-page save
@@ -282,6 +291,9 @@ boot_entry
 	.(
 	sei
 	cld
+#if PRORWTS
+	jsr	prorwts2_init	; TODO check status?
+#endif
 	ldx	#moverlen
 copy
 	lda	mover,x
@@ -306,6 +318,47 @@ mover
 	sta	$03		; dest = $0800
 
 	ldx	#SAFEPG-$8
+	jsr	pageloop
+
+; ProRWTS requires we move engine code to $d000-$ffff
+; and the init segment
+#if PRORWTS
+himemsegsec = engine_reloc + $2000 - $800 + boothdrlen
+	lda	#<himemsegsec
+	sta	$00
+	lda	#>himemsegsec
+	sta	$01		; source = bootcode
+
+	lda	#$00
+	sta	$02
+	lda	#$d0
+	sta	$03		; dest = $d000
+
+	lda	$C08B		; write lc_bank = 1
+	lda	$C08B
+	ldx	#$30
+	jsr	pageloop
+	lda	$C088		; read lc_bank = 1
+
+initsegsec = initsegment + $2000 - $800 + boothdrlen + himem_end - himem_start
+	lda	#<initsegsec
+	sta	$00
+	lda	#>initsegsec
+	sta	$01		; source = bootcode2
+
+	lda	#<initsegment
+	sta	$02
+	lda	#>initsegment
+	sta	$03		; dest = initsegment
+
+	ldx	#SAFEPG-$8
+	jsr	pageloop
+
+	jsr	swaprwregs	; load prorwts registers into save bank
+#endif
+
+	jmp	coldstart
+
 pageloop
 	ldy	#0
 byteloop
@@ -318,13 +371,12 @@ byteloop
 	inc	$03
 	dex
 	bne	pageloop
+	rts
 	.)
-
-	jmp	coldstart
 
 bootcode = *
 moverlen = * - mover
-bootcodelen = * - boot_entry
+boothdrlen = * - boot_entry
 
 #endif
 
@@ -878,7 +930,7 @@ cout
 	.(
 	stx	coutx
 	sty	couty
-	jsr	COUT
+	ROMCALL(COUT)
 	ldx	coutx
 	ldy	couty
 	rts
@@ -892,7 +944,7 @@ clrwin
 	bit	col80
 	bmi	firmware
 
-	jmp	HOME
+	ROMTAILCALL(HOME)
 firmware
 	lda	#$8c		; ctrl-L
 	jmp	cout
@@ -906,7 +958,7 @@ gotoxy
 ; https://www.atarimagazines.com/compute/issue76/Feedback_3.php
 	stx	OURCH	; synchronize CH and OURCH
 	sty	CV
-	jmp	VTAB
+	ROMTAILCALL(VTAB)
 	.)
 
 set_inverse
@@ -1494,13 +1546,7 @@ rewind
 	lda	#'R'
 	jsr	cout
 #endif
-	lda     #0
-        sta     $5f ; blkidx
-        sta     $63 ; blkofflo
-        sta     $64 ; blkoffhi
-        sta     $5b ; treeidx (TODO set B >> 8)
-	sta	next_rpagelo
-	sta	next_rpagehi
+	jsr	rwts_rewind
 	beq	redoseek	; recompute desired - next
 norewind
 #ifdef DEBUG
@@ -1525,21 +1571,21 @@ norewind
 	lda	#0
 	adc	next_rpagehi
 	sta	next_rpagehi
-        lda	$C08B		; lc_bank=1  (use $C083 for lc_bank=2) — read twice
-        lda	$C08B
+        lda	$C083		; write lc_bank=2
+        lda	$C083
         jsr     prorwts_rdwrpart
-        lda	$C081		; ROMIN
+        lda	$C088		; read lc_bank=1
 	jmp	redoseek	; recompute
 nobigseek
 	lda	seekoffset
 	sta	prorwts_sizehi
 #ifdef DEBUG
-	jsr	PRBYTE
+	ROMCALL(PRBYTE)
 #endif
-        lda	$C08B		; lc_bank=1  (use $C083 for lc_bank=2) — read twice
-        lda	$C08B
+        lda	$C083		; write lc_bank=2
+        lda	$C083
         jsr     prorwts_rdwrpart
-        lda	$C081		; ROMIN
+        lda	$C088		; read lc_bank=1
 noseek
 	lda     rp_page
 	sta	prorwts_ldrhi
@@ -1549,16 +1595,18 @@ noseek
         lda     #0
         sta     prorwts_sizelo
 	sta	prorwts_ldrlo
-        lda	$C08B		; lc_bank=1  (use $C083 for lc_bank=2) — read twice
-        lda	$C08B
+        lda	$C083		; write lc_bank=2
+        lda	$C083
         jsr     prorwts_rdwrpart
-        lda	$C081		; ROMIN
+        lda	$C088		; read lc_bank=1
 
 	ldy	prorwts_status
 	jsr	swaprwregs
 	tya
-	bne	err
-
+	beq	noerr
+err
+	jmp	diskerror
+noerr
 	lda	ioparam
 	clc
 	adc	#1
@@ -1570,15 +1618,15 @@ noseek
 
 #ifdef DEBUG
 	lda	ioparam+1
-	jsr	PRBYTE
+	ROMCALL(PRBYTE)
 	lda	ioparam
-	jsr	PRBYTE
+	ROMCALL(PRBYTE)
 #if PRORWTS
-	lda	$5f - rwregs_first + rwregsbuf
-	jsr	PRBYTE
+	lda	rp_page
+	ROMCALL(PRBYTE)
 #endif
 	lda	#$a0
-	jsr	COUT1
+	jsr	cout
 #endif
 	; store in aux memory
 	bit	col80
@@ -1613,9 +1661,22 @@ noseek
 nosaveinaux
 	lda	rp_page
 	rts
-err
-	jmp	diskerror
 	.)
+
+#if PRORWTS
+rwts_rewind
+	.(
+	lda     #0
+        sta     $5b ; treeidx (TODO set B >> 8)
+        sta     $5f ; blkidx
+        sta     $63 ; blkofflo
+        sta     $64 ; blkoffhi
+	; next page read will be 0
+	sta	next_rpagelo
+	sta	next_rpagehi
+	rts
+	.)
+#endif
 
 #if PRODOS
 ; =====================================
@@ -1682,17 +1743,17 @@ diskerror
 	lda	#'E'
 	jsr	cout
 	pla
-	jsr	PRBYTE	; print error code
+	ROMCALL(PRBYTE) ; error code
 #ifdef DEBUG
 	lda	rp_page
-	jsr	PRBYTE	; print some debugging info
+	ROMCALL(PRBYTE) ; error code
 	lda	ioparam
-	jsr	PRBYTE
+	ROMCALL(PRBYTE) ; error code
 #if PRODOS
 	lda	p_read+3
-	jsr	PRBYTE
+	ROMCALL(PRBYTE) ; error code
 	lda	p_read+2
-	jsr	PRBYTE
+	ROMCALL(PRBYTE) ; error code
 #endif
 #endif
 halt
@@ -1749,10 +1810,6 @@ NTRANS = trlo-trhi
 
 coldstart
 	.(
-#if PRORWTS
-	jsr	prorwts2_init	; TODO check status?
-	jsr	swaprwregs	; load prorwts registers into save bank
-#endif
 
 	jsr	initsystem
 
@@ -1915,21 +1972,13 @@ setupvideo
 	bit	col80
 	bmi	firmware
 
-	; Force plain 40-column Monitor output.
-	; A previously run system program may
-	; have left the firmware hooked up.
-
-	sta	CLR80COL
-	sta	CLR80STORE
-	jsr	SETTXT
-
 	lda	#<COUT1		; force video output for COUT
 	sta	CSW+0
 	lda	#>COUT1
 	sta	CSW+1
 	jmp	window
 firmware
-	jsr	SETTXT
+	ROMCALL(SETTXT)
 	jsr	SLOT3		; hook up the //e
 				; 80-column firmware
 
@@ -2069,20 +2118,15 @@ openstory
         sta     prorwts_namhi
 	lda	#0
 	sta	prorwts_sizelo
-	sta	prorwts_ldrlo
+	sta	prorwts_ldrlo	; TODO remove?
 	sta	prorwts_sizehi
-	lda	#4		; TODO remove
 	sta	prorwts_ldrhi
-        lda	$C08B		; lc_bank=1  (use $C083 for lc_bank=2) — read twice
-        lda	$C08B
+        lda	$C083		; write lc_bank=2
+        lda	$C083
         jsr	prorwts_opendir
-        lda	$C081		; ROMIN
+        lda	$C088		; read lc_bank=1
 	; reset seek pos to 0
-	lda	#0
-	sta	$5f		;blkidx
-	; next page read will be 0
-	sta	next_rpagelo
-	sta	next_rpagehi
+	jsr	rwts_rewind
 	ldy	prorwts_status
 	jsr	swaprwregs
 	tya
@@ -2123,7 +2167,7 @@ SAVEADDR = SAFEPG << 8
 ; relocate itself
 
 #if PRORWTS
-prorwts2_init = * + $2000 - $800 + bootcodelen
+prorwts2_init = * + $2000 - $800 + boothdrlen + himem_end - himem_start
 ;	.bin	0,0,"a2_prorwts2.bin"
 #endif
 
