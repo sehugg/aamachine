@@ -52,9 +52,10 @@
 ;		parameter blocks
 ;  0300 - 03ff	aux page cache tables
 ;  0400 - 07ff	text page 1
-;  0800 -~4000	interpreter code
-; ~4000 -~4800	init code, reclaimed as cache
-; ~4000 - baff	page buffers / dynamic data
+;  0800 -~4600	interpreter code
+; ~4600 -~4e00	init code, reclaimed as cache
+; ~4600 - 75ff	page buffers
+;  7600 - baff  heap
 ;  bb00 - beff	ProDOS file buffer
 ;  bf00 - bfff	ProDOS global page
 ;  d000 - ffff	ProDOS 8 (language card)
@@ -65,17 +66,21 @@
 ;  0800 - 87ff  aux page cache
 ;  8800 - beff	aux undo ring
 ;
+; ProRWTS2 Version:
+;
+; This version uses a small-footprint ProDOS library
+; which resides at $d000-$dfff.
+;
+; Main memory map (ProRWTS2)
+; =====================================
+;  0800 - 1800	interpreter code
+;  1800 - 4800  page buffers
+;  4800 - bfff  dynamic data
+;  d000 - ffff  interpreter code
+;
 ; RWTS18 Version (TODO):
 ;
-; This version will open up the 16K of language card memory,
-; making larger-footprint games possible. It uses the
-; RWTS18 disk format, giving you 161,280 bytes of disk.
-;
-; Main memory map (RWTS18)
-; =====================================
-;  0800 -~1000	interpreter code
-;  1000 - bfff  page buffers / dynamic data
-;  d000 - ffff  interpreter code
+; Uses the RWTS18 disk format, giving you 161,280 bytes of disk.
 ;
 ; TODO The 80STORE soft switch remaps $0400-$07ff
 ; and $2000-$3fff, so staying above both
@@ -272,9 +277,8 @@ prorwts_opendir	 = prorwts_reloc + 3
 
 	* = $2000
 #if PRODOS || PRORWTS
-
 ; First, we move the mover to $300...
-
+boot_entry
 	.(
 	sei
 	cld
@@ -320,6 +324,7 @@ byteloop
 
 bootcode = *
 moverlen = * - mover
+bootcodelen = * - boot_entry
 
 #endif
 
@@ -2112,13 +2117,15 @@ RAMEND = $bb00
 RAMEND = $c000
 #endif
 
-; this library is at the end of the file
-#if PRORWTS
-prorwts2_init = *
-;	.bin	0,0,"a2_prorwts2.bin"
-SAFEPG = (* + $8ff) >> 8
-#endif
-#if PRODOS
 SAFEPG = (* + $ff) >> 8
-#endif
 SAVEADDR = SAFEPG << 8
+
+; this library is at the end of the file
+; but it does not have to be moved, it will
+; relocate itself
+
+#if PRORWTS
+prorwts2_init = * + $2000 - $800 + bootcodelen
+;	.bin	0,0,"a2_prorwts2.bin"
+#endif
+
