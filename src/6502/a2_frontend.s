@@ -296,7 +296,7 @@ boot_entry
 #endif
 	ldx	#moverlen
 copy
-	lda	mover,x
+	lda	moversrc,x
 	sta	$0300,x
 	dex
 	bpl	copy
@@ -305,6 +305,8 @@ copy
 	.)
 
 ; Then we run the mover at $300
+	moversrc = *
+	* = $300
 mover
 	.(
 	lda	#<bootcode
@@ -353,10 +355,10 @@ initsegsec = initsegment + $2000 - $800 + boothdrlen + himem_end - himem_start
 
 	ldx	#SAFEPG-$8
 	jsr	pageloop
-
+#if PRORWTS
 	jsr	swaprwregs	; load prorwts registers into save bank
 #endif
-
+#endif
 	jmp	coldstart
 
 pageloop
@@ -374,9 +376,9 @@ byteloop
 	rts
 	.)
 
-bootcode = *
-moverlen = * - mover
-boothdrlen = * - boot_entry
+moverlen = * - $300
+boothdrlen = moverlen + moversrc - $2000
+bootcode = $2000 + boothdrlen
 
 #endif
 
@@ -1631,10 +1633,8 @@ noerr
 	jsr	prbyte
 	lda	ioparam
 	jsr	prbyte
-#if PRORWTS
 	lda	rp_page
 	jsr	prbyte
-#endif
 	lda	#$a0
 	jsr	cout
 #endif
@@ -1755,7 +1755,7 @@ diskerror
 	lda	#'E'
 	jsr	cout
 	pla
-	jsr	prbyte ; error code
+	ROMCALL(PRBYTE) ; error code
 #ifdef DEBUG
 	lda	rp_page
 	jsr	prbyte ; error code
@@ -1839,7 +1839,9 @@ coldstart
 	jsr	initengine3
 	jsr	initengine4
 	jsr	initengine5
-;	jsr	dumpram
+#ifdef DEBUG
+	jsr	dumpram
+#endif
 	jmp	startengine
 	.)
 

@@ -98,3 +98,17 @@ When bumping the version, update **all five** locations listed in `version_numbe
 - The `VERSION` constant in `src/js/nodefrontend.js`
 
 The three-part version has documented semantics: major = spec-breaking, minor = backwards-compatible spec change or spec doc fix, patch = tool-only improvement.
+
+## Making an Apple II Disk
+
+Make story.po and story2.po:
+
+`./makedsk.sh`
+
+Testing with izapple2:
+
+`~/bin/izconsole -model 2plus story.po`
+
+Testing with izapple2, example w/ tracing:
+
+`~/bin/izconsole -trace cpu,mli,ss -model 2enh story2.po | egrep -C 5 "^0x2000"`
