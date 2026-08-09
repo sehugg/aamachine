@@ -936,6 +936,18 @@ cout
 	rts
 	.)
 
+#ifdef DEBUG
+prbyte
+	.(
+	stx	coutx
+	sty	couty
+	ROMCALL(PRBYTE)
+	ldx	coutx
+	ldy	couty
+	rts
+	.)
+#endif
+
 clrwin
 	; clear the text window and home the
 	; cursor within it
@@ -1513,13 +1525,13 @@ noloadfromaux
 	ldx	#<p_mark
 	ldy	#>p_mark
 	jsr	mlicall
-	bcs	err
+	bcs	goterr
 
 	lda	#$ca		; READ
 	ldx	#<p_read
 	ldy	#>p_read
 	jsr	mlicall
-	bcs	err
+	bcs	goterr
 #endif
 
 #if PRORWTS
@@ -1580,7 +1592,7 @@ nobigseek
 	lda	seekoffset
 	sta	prorwts_sizehi
 #ifdef DEBUG
-	ROMCALL(PRBYTE)
+	jsr	prbyte
 #endif
         lda	$C083		; write lc_bank=2
         lda	$C083
@@ -1604,8 +1616,6 @@ noseek
 	jsr	swaprwregs
 	tya
 	beq	noerr
-err
-	jmp	diskerror
 noerr
 	lda	ioparam
 	clc
@@ -1618,12 +1628,12 @@ noerr
 
 #ifdef DEBUG
 	lda	ioparam+1
-	ROMCALL(PRBYTE)
+	jsr	prbyte
 	lda	ioparam
-	ROMCALL(PRBYTE)
+	jsr	prbyte
 #if PRORWTS
 	lda	rp_page
-	ROMCALL(PRBYTE)
+	jsr	prbyte
 #endif
 	lda	#$a0
 	jsr	cout
@@ -1661,6 +1671,8 @@ noerr
 nosaveinaux
 	lda	rp_page
 	rts
+goterr
+	jmp	diskerror
 	.)
 
 #if PRORWTS
@@ -1743,17 +1755,17 @@ diskerror
 	lda	#'E'
 	jsr	cout
 	pla
-	ROMCALL(PRBYTE) ; error code
+	jsr	prbyte ; error code
 #ifdef DEBUG
 	lda	rp_page
-	ROMCALL(PRBYTE) ; error code
+	jsr	prbyte ; error code
 	lda	ioparam
-	ROMCALL(PRBYTE) ; error code
+	jsr	prbyte ; error code
 #if PRODOS
 	lda	p_read+3
-	ROMCALL(PRBYTE) ; error code
+	jsr	prbyte ; error code
 	lda	p_read+2
-	ROMCALL(PRBYTE) ; error code
+	jsr	prbyte ; error code
 #endif
 #endif
 halt
@@ -1827,8 +1839,38 @@ coldstart
 	jsr	initengine3
 	jsr	initengine4
 	jsr	initengine5
+;	jsr	dumpram
 	jmp	startengine
 	.)
+
+#ifdef DEBUG
+dumpram
+	.(
+	lda #$8d
+	jsr cout
+	ldy #$0
+loop2
+	ldx #8
+	tya
+	jsr prbyte
+	lda #':'+$80
+	jsr cout
+	jsr cout
+loop
+	lda $00,y
+	jsr prbyte
+	lda #$a0
+	jsr cout
+	iny
+	dex
+	bne loop
+	lda #$8d
+	jsr cout
+	tya
+	bne loop2
+	rts	
+	.)
+#endif
 
 #include "engine.s"
 
