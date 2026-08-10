@@ -1,4 +1,5 @@
-#define DEBUG
+;#define DEBUG
+;#define DEBUGIO
 ; Apple II (ProDOS) Aa-machine frontend.
 ; Designed for the xa65 assembler.
 ;
@@ -1503,7 +1504,7 @@ io_readpage
 	clc			; aux -> main
 	jsr	AUXMOVE
 	jsr	swapauxregs
-#ifdef DEBUG
+#ifdef DEBUGIO
 	lda	#'C'
 	jsr	cout
 #endif
@@ -1556,14 +1557,14 @@ redoseek
 
 ; be kind, rewind
 rewind
-#ifdef DEBUG
+#ifdef DEBUGIO
 	lda	#'R'
 	jsr	cout
 #endif
 	jsr	rwts_rewind
 	beq	redoseek	; recompute desired - next
 norewind
-#ifdef DEBUG
+#ifdef DEBUGIO
 	lda	#'S'
 	jsr	cout
 #endif
@@ -1573,7 +1574,7 @@ norewind
 	lda	seekoffset+1
 	bpl	nobigseek
 ; big seek = $ff00 bytes
-#ifdef DEBUG
+#ifdef DEBUGIO
 	lda	#'B'
 	jsr	cout
 #endif
@@ -1593,7 +1594,7 @@ norewind
 nobigseek
 	lda	seekoffset
 	sta	prorwts_sizehi
-#ifdef DEBUG
+#ifdef DEBUGIO
 	jsr	prbyte
 #endif
         lda	$C083		; write lc_bank=2
@@ -1628,7 +1629,7 @@ noerr
 	sta	next_rpagehi
 #endif
 
-#ifdef DEBUG
+#ifdef DEBUGIO
 	lda	ioparam+1
 	jsr	prbyte
 	lda	ioparam
@@ -1840,12 +1841,224 @@ coldstart
 	jsr	initengine4
 	jsr	initengine5
 #ifdef DEBUG
-	jsr	dumpram
+	jsr	dumpvars
 #endif
 	jmp	startengine
 	.)
 
 #ifdef DEBUG
+prword	.(
+	pha
+	txa
+	pha
+	pla
+	tax
+	pla
+	rts
+	.)
+
+dumpvars
+	.(
+	lda	#$8d
+	jsr	cout
+	lda	firstpg
+	jsr	prbyte
+	lda	endpg
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+
+	lda	vtmsb
+	jsr	prbyte
+	lda	vtptr+1
+	jsr	prbyte
+	lda	vtptr+0
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+
+	lda	vtsize+1
+	jsr	prbyte
+	lda	vtsize+0
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+
+	lda	freeptr+1
+	jsr	prbyte
+	lda	freeptr+0
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+
+	lda	#$8d
+	jsr	cout
+
+	; heap sizes (b-e words)
+	lda	heapsz
+	jsr	prbyte
+	lda	heapsz+1
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+	lda	auxsz
+	jsr	prbyte
+	lda	auxsz+1
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+	lda	ramsz
+	jsr	prbyte
+	lda	ramsz+1
+	jsr	prbyte
+	lda	#$8d
+	jsr	cout
+
+	; bases (l-e words)
+	lda	hpbase+1
+	jsr	prbyte
+	lda	hpbase+0
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+	lda	auxbase+1
+	jsr	prbyte
+	lda	auxbase+0
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+	lda	rambase+1
+	jsr	prbyte
+	lda	rambase+0
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+	lda	inbase+1
+	jsr	prbyte
+	lda	inbase+0
+	jsr	prbyte
+	lda	#$8d
+	jsr	cout
+
+	lda	codeseg+0
+	jsr	prbyte
+	lda	codeseg+1
+	jsr	prbyte
+	lda	codeseg+2
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+	lda	lngbase+1
+	jsr	prbyte
+	lda	lngbase+0
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+	lda	mapbase+1
+	jsr	prbyte
+	lda	mapbase+0
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+	lda	decoder+1
+	jsr	prbyte
+	lda	decoder+0
+	jsr	prbyte
+	lda	#$8d
+	jsr	cout
+	rts
+;	jmp	verify
+	.)
+
+; Read every whole page of the story file
+; through io_readpage and Fletcher-8 it, so
+; the storage layer can be checked against a
+; checksum computed on the host.
+
+fla	= numer
+flb	= numer+1
+
+verify
+	.(
+	lda	#0
+	sta	fla
+	sta	flb
+	sta	ioparam
+	sta	ioparam+1
+pgloop
+	lda	#0
+	sta	phydata
+	lda	firstpg
+	sta	phydata+1
+
+	ldy	#0
+	tya
+clrloop	
+	sta	(phydata),y
+	iny
+	bne	clrloop
+
+	ldx	firstpg
+	jsr	io_readpage
+
+	lda	#0
+	sta	phydata
+	lda	firstpg
+	sta	phydata+1
+
+	ldy	#0
+byteloop
+	lda	(phydata),y
+	clc
+	adc	fla
+	sta	fla
+	clc
+	adc	flb
+	sta	flb
+	iny
+	bne	byteloop
+
+	inc	ioparam
+	bne	nov
+	inc	ioparam+1
+nov
+	lda	fla
+	jsr	prbyte
+	lda	flb
+	jsr	prbyte
+	; loop while ioparam < vtsize-0
+	lda	vtsize
+	clc
+	adc	#1
+	sta	f_temp
+	lda	vtsize+1
+	adc	#0
+	sta	f_temp+1
+
+	lda	ioparam
+	cmp	f_temp
+	lda	ioparam+1
+	sbc	f_temp+1
+	bcc	pgloop
+
+	lda	#$8d
+	jsr	cout
+	lda	ioparam+1
+	jsr	prbyte
+	lda	ioparam
+	jsr	prbyte
+	lda	#$a0
+	jsr	cout
+	lda	flb
+	jsr	prbyte
+	lda	fla
+	jsr	prbyte
+	lda	#$8d
+	jsr	cout
+;	rts
+halt3	jmp	halt3
+	.)
+
 dumpram
 	.(
 	lda #$8d

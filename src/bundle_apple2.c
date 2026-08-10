@@ -28,9 +28,12 @@
 
 static char storyname[48];
 
-static void writefile(char *dirname, char *name, const uint8_t *data, size_t size) {
+/* Writes data, then pads the file with zeros up to a multiple of padto
+ * bytes (padto = 1 means no padding). */
+static void writefile_padded(char *dirname, char *name, const uint8_t *data, size_t size, size_t padto) {
 	char *filename;
 	FILE *f;
+	size_t npad;
 
 	filename = malloc(strlen(dirname) + strlen(name) + 2);
 	sprintf(filename, "%s/%s", dirname, name);
@@ -44,11 +47,23 @@ static void writefile(char *dirname, char *name, const uint8_t *data, size_t siz
 		fprintf(stderr, "%s: %s\n", filename, strerror(errno));
 		exit(1);
 	}
+	npad = (padto - size % padto) % padto;
+	while(npad--) {
+		if(EOF == fputc(0, f)) {
+			fprintf(stderr, "%s: %s\n", filename, strerror(errno));
+			exit(1);
+		}
+		size++;
+	}
 	fclose(f);
 
 	printf("%-14s %7lu bytes\n", name, (unsigned long) size);
 
 	free(filename);
+}
+
+static void writefile(char *dirname, char *name, const uint8_t *data, size_t size) {
+	writefile_padded(dirname, name, data, size, 1);
 }
 
 static const char readme[] =
@@ -103,7 +118,9 @@ void bundle_apple2(char *dirname) {
 	trim_chunks(1);
 
 	writefile(dirname, "AAM.SYSTEM", table_a2terp, sizeof(table_a2terp));
-	writefile(dirname, "STORY", story, storysize);
+	/* The interpreter reads STORY a page at a time, so round the file up
+	 * to a whole number of 256-byte pages. */
+	writefile_padded(dirname, "STORY", story, storysize, 256);
 	writefile(dirname, "readme.txt", (const uint8_t *) readme, strlen(readme));
 	writefile(dirname, "interpreter_license.txt",
 		table_a2license, sizeof(table_a2license));
