@@ -51,7 +51,7 @@
 ;  0100 - 01ff	stack
 ;  0200 - 02ff	frontend buffers and MLI
 ;		parameter blocks
-;  0300 - 03ff	aux page cache tables
+;  0300 - 037f	aux page cache tags
 ;  0400 - 07ff	text page 1
 ;  0800 -~4600	interpreter code
 ; ~4600 -~4e00	init code, reclaimed as cache
@@ -155,13 +155,35 @@ ALTCHRSET_ON	= $c00f
 ; ---- auxiliary memory ----
 
 AUXCACHESTART	= $800
-AUXCACHEPAGES	= $80
+AUXCACHEEND	= $c800		; the undo ring starts here
+AUXCACHEPAGES	= (AUXCACHEEND-AUXCACHESTART)>>8
 
-AUXCACHELO	= $300		; virtual page # for each aux cache page
-AUXCACHEHI	= $380
+; Slots are indexed by the virtual page
+; number modulo AUXCACHEPAGES, computed by
+; auxslot with repeated subtraction, so the
+; size does not have to be a power of two --
+; anything up to 255 pages works.
+;
+; auxslot hands back the quotient along with
+; the remainder, and since
+;   page = slot + quotient * AUXCACHEPAGES
+; the quotient alone identifies the page
+; occupying a slot.  That makes the tag one
+; byte instead of two, which both fits the
+; table below $03d0 (where the Monitor and
+; ProDOS keep their vectors) and lifts the
+; 128-slot ceiling that two-byte tags imposed
+; on page 3.
+;
+; The quotient has to stay under 256 for the
+; tag to be unique, so this holds for stories
+; below AUXCACHEPAGES * 64 kB -- 8 MB at 128
+; slots, well past what the machine can run.
 
-AUXUNDOLO	= $8800
-AUXUNDOHI	= $beff		; TODO inclusive?
+AUXCACHETAG	= $300		; AUXCACHEPAGES bytes
+
+AUXUNDOLO	= AUXCACHEEND
+AUXUNDOHI	= $ffff		; TODO inclusive?
 
 ; ---- frontend zero page ----
 
@@ -1093,6 +1115,7 @@ io_load
 ; slots between AUXUNDOLO and AUXUNDOHI.  The engine
 ; asks for the same size every time, so the
 ; layout is computed once, on the first save.
+; TODO make sure we have size for at least 1 slot
 
 io_undosupp
 	; output c = undo supported
@@ -1464,6 +1487,33 @@ setend
 ; Storage
 ; =====================================
 
+auxslot
+	; input f_temp = virtual page, l-e word
+	; output y = aux cache slot
+	; output a = quotient, i.e. the tag
+	; clobbers x, f_temp
+
+	.(
+	ldx	#$ff		; quotient
+loop
+	inx
+	lda	f_temp
+	sec
+	sbc	#AUXCACHEPAGES
+	tay
+	lda	f_temp+1
+	sbc	#0
+	bcc	done
+
+	sty	f_temp
+	sta	f_temp+1
+	bcs	loop		; always
+done
+	ldy	f_temp
+	txa
+	rts
+	.)
+
 io_readpage
 	; input x = physical ram target page
 	; input ioparam = virtual address 23..8, l-e
@@ -1475,15 +1525,13 @@ io_readpage
 	; do we have it in aux cache?
 	bit	col80
 	bpl	noloadfromaux
-	; check aux cache table for virtual page #
+	; check aux cache tag for this slot
 	lda	ioparam
-	and	#AUXCACHEPAGES-1
-	tay
-	lda	ioparam
-	cmp	AUXCACHELO,y
-	bne	noloadfromaux
+	sta	f_temp
 	lda	ioparam+1
-	cmp	AUXCACHEHI,y
+	sta	f_temp+1
+	jsr	auxslot
+	cmp	AUXCACHETAG,y
 	bne	noloadfromaux
 
 	; we have it, transfer page from aux cache
@@ -1643,21 +1691,21 @@ noerr
 	bit	col80
 	bpl	nosaveinaux
 
+	lda	ioparam
+	sta	f_temp
+	lda	ioparam+1
+	sta	f_temp+1
+	jsr	auxslot
+	sta	AUXCACHETAG,y	; tag this aux cache slot
+
 	jsr	swapauxregs
 	lda	#0
 	sta	A1+0
 	sta	A4+0
-	lda	ioparam
-	and	#AUXCACHEPAGES-1
-	tax
+	tya			; y is preserved
 	clc
 	adc	#>AUXCACHESTART
 	sta	A4+1		; dest in aux
-
-	lda	ioparam
-	sta	AUXCACHELO,x	; store virtual page # for this aux cache slot
-	lda	ioparam+1
-	sta	AUXCACHEHI,x
 
 	lda	rp_page
 	sta	A1+1		; src in main
@@ -2135,10 +2183,10 @@ clrlp
 	bne	clrlp
 
 	; clear the aux cache lookup table
-	lda	#$ff
+	lda	#$ff		; never a valid quotient
 	ldx	#AUXCACHEPAGES
 auxclrlp
-	sta	AUXCACHEHI-1,x
+	sta	AUXCACHETAG-1,x
 	dex
 	bne	auxclrlp
 
@@ -2270,6 +2318,7 @@ removeram
 	; ProDOS puts its RAM disk in auxiliary
 	; memory, which is where the undo ring / aux page cache
 	; goes, so unhook it first, if it's there.
+	; TODO restore on quit
 
 	.(
 	bit	auxram
