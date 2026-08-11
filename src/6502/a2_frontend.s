@@ -1368,7 +1368,6 @@ sv_name
 io_save
 io_load
 	.(
-	; TODO
 	clc
 	rts
 	.)
