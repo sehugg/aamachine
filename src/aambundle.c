@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
 	if(!strcmp(target, "web:story")) {
 		bundle_web_story(dirname);
 	} else {
-		if(mkdir(dirname, 0777)) {
+		if(mkdir(dirname, 0777) && errno != EEXIST) {
 			fprintf(stderr, "%s: %s\n", dirname, strerror(errno));
 			exit(1);
 		}
