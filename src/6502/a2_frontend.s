@@ -1363,7 +1363,7 @@ sv_name
 	.byt	8
 	.asc	"SAVEFILE"
 
-#else // PRODOS && SAVERESTORE
+#elsif SAVERESTORE
 
 io_save
 io_load
@@ -1714,17 +1714,6 @@ setend
 
 	jmp	swapauxregs
 	.)
-
-#else // UNDO
-
-io_undosupp
-io_loadundo
-	.(
-	clc
-	rts
-	.)
-
-io_saveundo
 
 #endif
 
