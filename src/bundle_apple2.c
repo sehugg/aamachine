@@ -24,6 +24,10 @@
  *
  * STORY is read through the MLI a page at a time and never loaded whole,
  * so its file type should be $06 (binary)
+ *
+ * IMPORTANT:
+ * The disk volume containing the story file must be named "AA.STORY"
+ * but it need not be the same as the boot/interpreter volume.
  */
 
 static char storyname[48];
