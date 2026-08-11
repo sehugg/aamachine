@@ -155,7 +155,7 @@ ALTCHRSET_ON	= $c00f
 ; ---- auxiliary memory ----
 
 AUXCACHESTART	= $800
-AUXCACHEEND	= $c800		; the undo ring starts here
+AUXCACHEEND	= $c000
 AUXCACHEPAGES	= (AUXCACHEEND-AUXCACHESTART)>>8
 
 ; Slots are indexed by the virtual page
@@ -182,7 +182,7 @@ AUXCACHEPAGES	= (AUXCACHEEND-AUXCACHESTART)>>8
 
 AUXCACHETAG	= $300		; AUXCACHEPAGES bytes
 
-AUXUNDOLO	= AUXCACHEEND
+AUXUNDOLO	= $d000
 AUXUNDOHI	= $ffff		; TODO inclusive?
 
 ; ---- frontend zero page ----
@@ -1121,13 +1121,8 @@ io_undosupp
 	; output c = undo supported
 
 	.(
-	bit	auxram
-	bpl	no
-
-	sec
-	rts
-no
-	clc
+	lda	auxram
+	asl
 	rts
 	.)
 
@@ -1523,7 +1518,7 @@ io_readpage
 	stx	rp_page
 
 	; do we have it in aux cache?
-	bit	col80
+	bit	auxram
 	bpl	noloadfromaux
 	; check aux cache tag for this slot
 	lda	ioparam
@@ -1688,7 +1683,7 @@ noerr
 	jsr	cout
 #endif
 	; store in aux memory
-	bit	col80
+	bit	auxram
 	bpl	nosaveinaux
 
 	lda	ioparam
