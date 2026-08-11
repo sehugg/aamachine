@@ -95,7 +95,6 @@
 ;
 ; TODO The 80STORE soft switch remaps $0400-$07ff
 ; and $2000-$3fff, so staying above both
-
 ; whatever the video firmware has left the
 ; switches set to?
 
@@ -111,7 +110,7 @@
 ; - 2-disk mode - "STORY-xx-yy"
 ; - use the packer instead of boot mover
 ; - PRORWTS memory map shadows the 6502 vectors
-; - RWTS18 non-ProDOS verison using lang card RAM
+	; - RWTS18 non-ProDOS verison using lang card RAM
 
 DEFWIDTH	= 80
 
@@ -1091,10 +1090,11 @@ noeor
 ; The story file is reopened after every save
 ; and load, so its name has to outlive the init
 ; segment that opens it the first time.
+; TODO only if SAVERESTORE is defined
 
 pathname
-	.byt	5
-	.asc	"STORY"
+	.byt	5+8+2
+	.asc	"/AA.STORY/STORY"
 
 ; =====================================
 ; Saved games
@@ -1109,7 +1109,7 @@ pathname
 ; before every read, so the reopened file does
 ; not have to remember where it was.
 
-#if PRODOS
+#if PRODOS && SAVERESTORE
 
 io_save
 	; input x = size lsb
@@ -1362,9 +1362,7 @@ sv_name
 	.byt	8
 	.asc	"SAVEFILE"
 
-#endif
-
-#if PRORWTS
+#else // PRODOS && SAVERESTORE
 
 io_save
 io_load
@@ -2632,6 +2630,7 @@ banner
 #if PRODOS
 openstory
 	.(
+retry
 	lda	#$c8		; OPEN
 	ldx	#<p_open
 	ldy	#>p_open
@@ -2641,8 +2640,8 @@ openstory
 	ldx	#<txt_nostory
 	ldy	#>txt_nostory
 	jsr	putstr
-nofile
-	jmp	nofile
+	jsr	io_getc
+	jmp	retry
 opened
 	lda	p_open+5
 	sta	p_read+1
@@ -2716,7 +2715,7 @@ txt_banner
 	.asc	0
 
 txt_nostory
-	.asc	"Cannot open STORY.",10,0
+	.asc	"Insert story disk and press a key.",10,0
 
 #if PRODOS
 RAMEND = $bb00
