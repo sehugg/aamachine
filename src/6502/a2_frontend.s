@@ -64,8 +64,7 @@
 ; =====================================
 ;  0400 - 07ff	80-column text page
 ;  0800 - 87ff  aux page cache
-;  8800 - beff	aux undo ring
-; TODO: bigger aux page cache
+;  8800 - bfff	aux undo ring
 ;
 ; ProRWTS2 Version (TODO):
 ;
@@ -159,7 +158,7 @@ ALTCHRSET_ON	= $c00f
 ; ---- auxiliary memory ----
 
 AUXCACHESTART	= $800
-AUXCACHEEND	= $c000
+AUXCACHEEND	= $8800
 AUXCACHEPAGES	= (AUXCACHEEND-AUXCACHESTART)>>8
 
 ; Slots are indexed by the virtual page
@@ -186,8 +185,21 @@ AUXCACHEPAGES	= (AUXCACHEEND-AUXCACHESTART)>>8
 
 AUXCACHETAG	= $300		; AUXCACHEPAGES bytes
 
-AUXUNDOLO	= $d000
-AUXUNDOHI	= $ffff		; TODO inclusive?
+; The undo ring takes what is left of
+; auxiliary memory.  It has to end at $c000,
+; because AUXMOVE reaches aux memory by
+; flipping RAMRD and RAMWRT, and neither of
+; those switches covers the language card --
+; a ring above $c000 would quietly read and
+; write ROM instead.
+;
+; Trading pages between the cache and the ring
+; is a matter of moving AUXCACHEEND, which is
+; also AUXUNDOLO.
+
+AUXUNDOLO	= AUXCACHEEND
+AUXUNDOEND	= $c000
+AUXUNDOPAGES	= (AUXUNDOEND-AUXUNDOLO)>>8
 
 ; ---- frontend zero page ----
 
@@ -234,19 +246,22 @@ auxregsbuf	= $0270	; AUXMOVE zero-page save
 
 ; Undo ring bookkeeping.  Snapshots are all
 ; the same size, so the ring is a plain array
-; of slots between AUXUNDOLO and AUXUNDOHI.
+; of equal slots starting at AUXUNDOLO.  Each
+; slot is rounded up to whole pages, which
+; puts every slot on a page boundary and keeps
+; the bookkeeping to single bytes -- slots are
+; tracked by index, and a slot address is just
+; a msb.
 
-u_next		= $0278	; word, where the next
-			; snapshot goes
-u_old		= $027a	; word, oldest snapshot
-u_last		= $027c	; word, highest slot start
-u_size		= $027e	; word, snapshot size
-u_tmp		= $0280	; word, scratch
-u_end		= $0282	; word, scratch
-u_max		= $0284	; slot capacity, max 255
-u_count		= $0285	; snapshots stored
-u_ready		= $0286	; nonzero once sized
-u_dir		= $0287	; $80 = main to aux
+u_size		= $0278	; word, snapshot size
+u_pages		= $027a	; slot stride, in pages
+u_max		= $027b	; slot capacity
+u_count		= $027c	; snapshots stored
+u_head		= $027d	; index of the next slot
+u_ready		= $027e	; nonzero once sized
+u_dir		= $027f	; $80 = main to aux
+u_page		= $0280	; msb of the slot undomove
+			; is working on
 
 #if PRODOS || PRORWTS
 MACHID		= $bf98
@@ -1058,12 +1073,7 @@ io_restart
 #if UNDO
 	lda	#0
 	sta	u_count
-	lda	#<AUXUNDOLO
-	sta	u_next+0
-	sta	u_old+0
-	lda	#>AUXUNDOLO
-	sta	u_next+1
-	sta	u_old+1
+	sta	u_head
 #endif
 	rts
 	.)
@@ -1381,10 +1391,10 @@ io_load
 ; =====================================
 
 ; Snapshots go into a ring of equal-sized
-; slots between AUXUNDOLO and AUXUNDOHI.  The engine
+; slots starting at AUXUNDOLO.  The engine
 ; asks for the same size every time, so the
 ; layout is computed once, on the first save.
-; TODO make sure we have size for at least 1 slot
+; If not even one slot fits, undo just fails.
 
 io_undosupp
 	; output c = undo supported
@@ -1402,48 +1412,32 @@ io_saveundo
 	; output c = success
 
 	.(
-	bit	auxram
-	bpl	no
-
 	jsr	undoprep
 	bcc	no
 
-	lda	u_next+0
-	sta	u_tmp+0
-	lda	u_next+1
-	sta	u_tmp+1
+	lda	u_head
+	jsr	undoaddr
 	lda	#$80
 	sta	u_dir
 	jsr	undomove
 
-	; a full ring forgets its oldest entry
+	; a full ring forgets its oldest entry,
+	; which is the one u_head just landed on
 
 	lda	u_count
 	cmp	u_max
-	bcc	room
+	bcs	full
 
-	lda	u_old+0
-	sta	u_tmp+0
-	lda	u_old+1
-	sta	u_tmp+1
-	jsr	undoadv
-	lda	u_tmp+0
-	sta	u_old+0
-	lda	u_tmp+1
-	sta	u_old+1
-	jmp	bump
-room
 	inc	u_count
-bump
-	lda	u_next+0
-	sta	u_tmp+0
-	lda	u_next+1
-	sta	u_tmp+1
-	jsr	undoadv
-	lda	u_tmp+0
-	sta	u_next+0
-	lda	u_tmp+1
-	sta	u_next+1
+full
+	ldx	u_head
+	inx
+	cpx	u_max
+	bcc	store
+
+	ldx	#0
+store
+	stx	u_head
 
 	sec
 	rts
@@ -1462,9 +1456,6 @@ io_loadundo
 	;	2 error
 
 	.(
-	bit	auxram
-	bpl	err
-
 	jsr	undoprep
 	bcc	err
 
@@ -1473,15 +1464,15 @@ io_loadundo
 
 	; step back onto the newest snapshot
 
-	lda	u_next+0
-	sta	u_tmp+0
-	lda	u_next+1
-	sta	u_tmp+1
-	jsr	undoback
-	lda	u_tmp+0
-	sta	u_next+0
-	lda	u_tmp+1
-	sta	u_next+1
+	ldx	u_head
+	bne	back
+
+	ldx	u_max
+back
+	dex
+	stx	u_head
+	txa
+	jsr	undoaddr
 
 	lda	#0
 	sta	u_dir
@@ -1505,6 +1496,9 @@ undoprep
 	; snapshot of that size
 
 	.(
+	bit	auxram
+	bpl	nofit
+
 	lda	u_ready
 	beq	init
 
@@ -1531,8 +1525,10 @@ undoinit
 	; input x = byte size lsb
 	; input y = byte size msb
 	;
-	; Walks the ring one slot at a time
-	; rather than dividing.  It runs once.
+	; Rounds the snapshot up to whole pages
+	; and counts how many of those fit, one
+	; subtraction at a time rather than
+	; dividing.  It runs once.
 
 	.(
 	stx	u_size+0
@@ -1544,120 +1540,54 @@ undoinit
 	lda	#0
 	sta	u_max
 	sta	u_count
+	sta	u_head
 
-	lda	#<AUXUNDOLO
-	sta	u_tmp+0
-	sta	u_last+0
-	sta	u_next+0
-	sta	u_old+0
-	lda	#>AUXUNDOLO
-	sta	u_tmp+1
-	sta	u_last+1
-	sta	u_next+1
-	sta	u_old+1
+	txa			; partial page?
+	beq	whole
+
+	iny
+whole
+	tya
+	beq	none		; empty, or 64 kB and up
+
+	sta	u_pages
+
+	lda	#AUXUNDOPAGES
 loop
-	lda	u_tmp+0
-	clc
-	adc	u_size+0
-	sta	u_end+0
-	lda	u_tmp+1
-	adc	u_size+1
-	sta	u_end+1
-	bcs	done
-
-	; the slot has to end at or below AUXUNDOHI
-
-	lda	#<AUXUNDOHI
-	cmp	u_end+0
-	lda	#>AUXUNDOHI
-	sbc	u_end+1
-	bcc	done
-
-	ldx	u_max
-	inx
-	beq	done		; 255 slots is plenty
-
-	stx	u_max
-
-	lda	u_tmp+0
-	sta	u_last+0
-	lda	u_tmp+1
-	sta	u_last+1
-
-	lda	u_end+0
-	sta	u_tmp+0
-	lda	u_end+1
-	sta	u_tmp+1
-	jmp	loop
-done
-	rts
-	.)
-
-undoadv
-	; input/output u_tmp = slot address
-
-	.(
-	lda	u_tmp+0
-	clc
-	adc	u_size+0
-	sta	u_end+0
-	lda	u_tmp+1
-	adc	u_size+1
-	sta	u_end+1
-
-	; wrap once past the last slot
-
-	lda	u_last+0
-	cmp	u_end+0
-	lda	u_last+1
-	sbc	u_end+1
-	bcs	store
-
-	lda	#<AUXUNDOLO
-	sta	u_end+0
-	lda	#>AUXUNDOLO
-	sta	u_end+1
-store
-	lda	u_end+0
-	sta	u_tmp+0
-	lda	u_end+1
-	sta	u_tmp+1
-	rts
-	.)
-
-undoback
-	; input/output u_tmp = slot address
-
-	.(
-	lda	u_tmp+0
 	sec
-	sbc	u_size+0
-	sta	u_end+0
-	lda	u_tmp+1
-	sbc	u_size+1
-	sta	u_end+1
-	bcc	wrap
+	sbc	u_pages
+	bcc	none
 
-	lda	u_end+0
-	cmp	#<AUXUNDOLO
-	lda	u_end+1
-	sbc	#>AUXUNDOLO
-	bcs	store
-wrap
-	lda	u_last+0
-	sta	u_end+0
-	lda	u_last+1
-	sta	u_end+1
-store
-	lda	u_end+0
-	sta	u_tmp+0
-	lda	u_end+1
-	sta	u_tmp+1
+	inc	u_max
+	bne	loop		; always
+none
+	rts
+	.)
+
+undoaddr
+	; input a = slot index
+	; output u_page = msb of that slot
+	; clobbers a, x
+
+	.(
+	tax
+	lda	#>AUXUNDOLO
+loop
+	dex
+	bmi	done
+
+	clc
+	adc	u_pages
+	bne	loop		; always, the sum
+				; stays below AUXUNDOEND
+done
+	sta	u_page
 	rts
 	.)
 
 undomove
-	; input u_tmp = address in aux memory
+	; input u_page = msb of the slot in
+	; auxiliary memory
 	; input ioparam = address in main memory
 	; input u_dir bit 7 set = main to aux
 	;
@@ -1668,12 +1598,13 @@ undomove
 	.(
 	jsr	swapauxregs
 
+	lda	#0		; slots are page
+				; aligned
 	bit	u_dir
 	bmi	toaux
 
-	lda	u_tmp+0		; src in aux
-	sta	A1+0
-	lda	u_tmp+1
+	sta	A1+0		; src in aux
+	lda	u_page
 	sta	A1+1
 	lda	ioparam+0	; dest in main
 	sta	A4+0
@@ -1681,14 +1612,13 @@ undomove
 	sta	A4+1
 	jmp	setend
 toaux
+	sta	A4+0		; dest in aux
+	lda	u_page
+	sta	A4+1
 	lda	ioparam+0	; src in main
 	sta	A1+0
 	lda	ioparam+1
 	sta	A1+1
-	lda	u_tmp+0		; dest in aux
-	sta	A4+0
-	lda	u_tmp+1
-	sta	A4+1
 setend
 	; A2 = A1 + size - 1, inclusive
 
