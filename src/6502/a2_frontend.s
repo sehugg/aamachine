@@ -53,10 +53,9 @@
 ;		parameter blocks
 ;  0300 - 037f	aux page cache tags
 ;  0400 - 07ff	text page 1
-;  0800 -~4600	interpreter code
-; ~4600 -~4e00	init code, reclaimed as cache
-; ~4600 - 75ff	page buffers
-;  7600 - baff  heap
+;  0800 -~4800	interpreter code
+; ~4800 -~4e00	init code, reclaimed as cache
+; ~4800 - baff  heap / data
 ;  bb00 - beff	ProDOS file buffer
 ;  bf00 - bfff	ProDOS global page
 ;  d000 - ffff	ProDOS 8 (language card)
@@ -68,7 +67,7 @@
 ;  8800 - beff	aux undo ring
 ; TODO: bigger aux page cache
 ;
-; ProRWTS2 Version:
+; ProRWTS2 Version (TODO):
 ;
 ; This version uses a small-footprint ProDOS library
 ; which resides at $d000-$dfff.
@@ -76,11 +75,21 @@
 ; Main memory map (ProRWTS2)
 ; =====================================
 ;  0800 - 1800	interpreter code
-;  1800 - 4800  page buffers
-;  4800 - bfff  dynamic data
-;  d000 - ffff  interpreter code
+;  1800 - bfff  heap / data
+;  d000 - ffff  interpreter code (bank 1)
+;  d000 - d???  PRORWTS (bank 2)
 ;
-; RWTS18 Version (TODO):
+; 0boot Version (TODO)
+;
+; Main memory map (0boot)
+; =====================================
+;  0800 - 09ff  0boot routines
+;  0a00 - 0bff  0boot tables
+;  0c00 - 1c00  interpreter code
+;  1c00 - bfff  heap / data
+;  d000 - ffff  interpreter code (bank 1)
+;
+; RWTS18 Version (TODO)
 ;
 ; Uses the RWTS18 disk format, giving you 161,280 bytes of disk.
 ;
@@ -99,14 +108,10 @@
 ;   https://savagetaylor.com/til/TA33130.html
 ;
 ; TODO
-; - save/load
-; - Impossible Stairs .aastory doesn't work
-; - inverse mode sometimes seems confused in 80 column
-;   (but styles are turned off for now except for status)
 ; - 2-disk mode - "STORY-xx-yy"
 ; - use the packer instead of boot mover
+; - PRORWTS memory map shadows the 6502 vectors
 ; - RWTS18 non-ProDOS verison using lang card RAM
-; - use AUX memory more
 
 DEFWIDTH	= 80
 
@@ -1083,6 +1088,29 @@ noeor
 	rts
 	.)
 
+; The story file is reopened after every save
+; and load, so its name has to outlive the init
+; segment that opens it the first time.
+
+pathname
+	.byt	5
+	.asc	"STORY"
+
+; =====================================
+; Saved games
+; =====================================
+;
+; One slot, a file called SAVEFILE alongside
+; STORY.  ProDOS wants a kilobyte of buffer for
+; every open file and main memory has none to
+; spare, so STORY is closed for the duration
+; and lends SAVEFILE its buffer.  Nothing is
+; lost by that, io_readpage sets the mark
+; before every read, so the reopened file does
+; not have to remember where it was.
+
+#if PRODOS
+
 io_save
 	; input x = size lsb
 	; input y = size msb
@@ -1090,7 +1118,61 @@ io_save
 	; output c = success
 
 	.(
-	; TODO
+	stx	sv_size+0
+	sty	sv_size+1
+
+	jsr	closestory
+
+	lda	#$c0		; CREATE
+	ldx	#<p_create
+	ldy	#>p_create
+	jsr	mlicall
+	bcc	created
+
+	cmp	#$47		; already there, and
+	bne	fail		; about to be rewritten
+created
+	jsr	opensave
+	bcs	fail
+
+	lda	#<SAVEADDR
+	sta	p_rw+2
+	lda	#>SAVEADDR
+	sta	p_rw+3
+	lda	sv_size+0
+	sta	p_rw+4
+	lda	sv_size+1
+	sta	p_rw+5
+
+	lda	#$cb		; WRITE
+	ldx	#<p_rw
+	ldy	#>p_rw
+	jsr	mlicall
+	bcs	shut
+
+	; a short save must not leave the tail of
+	; a longer one behind it
+
+	lda	sv_size+0
+	sta	p_eof+2
+	lda	sv_size+1
+	sta	p_eof+3
+	lda	#0
+	sta	p_eof+4
+	lda	#$d0		; SET_EOF
+	ldx	#<p_eof
+	ldy	#>p_eof
+	jsr	mlicall
+	bcs	shut
+
+	jsr	closesave
+	jsr	reopenstory
+	sec
+	rts
+shut
+	jsr	closesave
+fail
+	jsr	reopenstory
 	clc
 	rts
 	.)
@@ -1102,10 +1184,197 @@ io_load
 	; otherwise, clear c
 
 	.(
+	jsr	closestory
+	jsr	opensave
+	bcs	fail
+
+	; the 12 byte FORM header
+	; length inside it says how much is left
+
+	lda	#<SAVEADDR
+	sta	p_rw+2
+	lda	#>SAVEADDR
+	sta	p_rw+3
+	lda	#12
+	sta	p_rw+4
+	lda	#0
+	sta	p_rw+5
+	jsr	readsave
+	bcs	shut
+
+	; bytes 6 and 7 are the length; the rest
+	; of the header is a fixed signature
+
+	ldy	#11
+check
+	cpy	#6
+	bcc	compare
+
+	cpy	#8
+	bcc	skip
+compare
+	lda	SAVEADDR,y
+	cmp	form0000aasv,y
+	bne	shut
+skip
+	dey
+	bpl	check
+
+	; four of those length bytes, the "AASV",
+	; arrived with the header
+
+	lda	SAVEADDR+7
+	sec
+	sbc	#4
+	sta	p_rw+4
+	lda	SAVEADDR+6
+	sbc	#0
+	sta	p_rw+5
+
+	lda	#<SAVEADDR+12
+	sta	p_rw+2
+	lda	#>SAVEADDR+12
+	sta	p_rw+3
+	jsr	readsave
+	bcs	shut
+
+	jsr	closesave
+	jsr	reopenstory
+	sec
+	rts
+shut
+	jsr	closesave
+fail
+	jsr	reopenstory
+	clc
+	rts
+	.)
+
+opensave
+	; output c = error
+
+	.(
+	lda	#<sv_name
+	sta	p_open+1
+	lda	#>sv_name
+	sta	p_open+2
+
+	lda	#$c8		; OPEN
+	ldx	#<p_open
+	ldy	#>p_open
+	jsr	mlicall
+	bcs	done
+
+	lda	p_open+5
+	sta	p_rw+1
+	sta	p_eof+1
+	clc
+done
+	rts
+	.)
+
+readsave
+	; ProDOS reports a short read as an error,
+	; which is exactly what a truncated
+	; savefile deserves
+
+	lda	#$ca		; READ
+	ldx	#<p_rw
+	ldy	#>p_rw
+	jmp	mlicall
+
+closesave
+	lda	p_rw+1
+	jmp	closefile
+
+closestory
+	lda	p_read+1
+	;jmp	closefile
+
+closefile
+	; input a = ref num
+
+	sta	p_close+1
+	lda	#$cc		; CLOSE
+	ldx	#<p_close
+	ldy	#>p_close
+	jmp	mlicall
+
+reopenstory
+	; Losing the story file here would leave
+	; nothing to go back to, so a failure is
+	; as fatal as any other disk error.
+
+	.(
+	lda	#<pathname
+	sta	p_open+1
+	lda	#>pathname
+	sta	p_open+2
+
+	lda	#$c8		; OPEN
+	ldx	#<p_open
+	ldy	#>p_open
+	jsr	mlicall
+	bcs	err
+
+	lda	p_open+5
+	sta	p_read+1
+	sta	p_mark+1
+	rts
+err
+	jmp	diskerror
+	.)
+
+; Parameter blocks and names for the above.
+; These outlive the init segment, so unlike
+; parmsrc they are assembled where they stand.
+
+sv_size	.word	0
+
+p_create
+	.byt	7
+	.word	sv_name
+	.byt	$c3		; read, write, rename,
+				; destroy
+	.byt	$06		; BIN
+	.word	SAVEADDR	; aux type
+	.byt	1		; standard file
+	.word	0		; date, 0 = ask ProDOS
+	.word	0		; time
+
+p_rw
+	.byt	4
+	.byt	0		; ref num
+	.word	0		; data buffer
+	.word	0		; request count
+	.word	0		; bytes transferred
+
+p_eof
+	.byt	2
+	.byt	0		; ref num
+	.byt	0,0,0		; new end of file
+
+p_close
+	.byt	1
+	.byt	0		; ref num
+
+sv_name
+	.byt	8
+	.asc	"SAVEFILE"
+
+#endif
+
+#if PRORWTS
+
+io_save
+io_load
+	.(
 	; TODO
 	clc
 	rts
 	.)
+
+#endif
 
 ; =====================================
 ; Undo, in auxiliary memory
@@ -2440,10 +2709,6 @@ nofile
 	jmp	diskerror	; TODO
 	.)
 #endif
-
-pathname
-	.byt	5
-	.asc	"STORY"
 
 txt_banner
 	.asc	"Aa-machine "
