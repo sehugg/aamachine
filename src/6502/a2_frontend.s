@@ -63,8 +63,9 @@
 ; Auxiliary memory, when there is any
 ; =====================================
 ;  0400 - 07ff	80-column text page
-;  0800 - 87ff  aux page cache
-;  8800 - bfff	aux undo ring
+;  0800 - bfff  aux page cache
+;  d000 - ffff	aux undo ring, both $d000
+;		banks, 16 kB in all
 ;
 ; ProRWTS2 Version (TODO):
 ;
@@ -155,10 +156,26 @@ CLR80COL	= $c00c
 ALTCHRSET_OFF	= $c00e
 ALTCHRSET_ON	= $c00f
 
+; ALTZP picks main or auxiliary for the zero
+; page, the stack and $d000-$ffff, all three
+; together.  The language card switches then
+; apply to whichever side ALTZP has selected.
+
+CLRALTZP	= $c008
+SETALTZP	= $c009
+
+LCRD2		= $c080		; read bank 2
+LCROM2		= $c082		; rom, bank 2 latched
+LCWR2		= $c083		; read/write bank 2,
+				; access twice
+LCRD1		= $c088		; read bank 1
+LCWR1		= $c08b		; read/write bank 1,
+				; access twice
+
 ; ---- auxiliary memory ----
 
 AUXCACHESTART	= $800
-AUXCACHEEND	= $8800
+AUXCACHEEND	= $c000
 AUXCACHEPAGES	= (AUXCACHEEND-AUXCACHESTART)>>8
 
 ; Slots are indexed by the virtual page
@@ -185,21 +202,29 @@ AUXCACHEPAGES	= (AUXCACHEEND-AUXCACHESTART)>>8
 
 AUXCACHETAG	= $300		; AUXCACHEPAGES bytes
 
-; The undo ring takes what is left of
-; auxiliary memory.  It has to end at $c000,
-; because AUXMOVE reaches aux memory by
-; flipping RAMRD and RAMWRT, and neither of
-; those switches covers the language card --
-; a ring above $c000 would quietly read and
-; write ROM instead.
+; The undo ring lives in the auxiliary
+; language card, so the page cache keeps all
+; of aux $0800-$bfff.
 ;
-; Trading pages between the cache and the ring
-; is a matter of moving AUXCACHEEND, which is
-; also AUXUNDOLO.
+; AUXMOVE is no help up there.  It reaches
+; auxiliary memory by flipping RAMRD and
+; RAMWRT, and those switches stop at $bfff --
+; above that the bank is chosen by ALTZP
+; instead, which also swaps the zero page and
+; the stack.  undomove drives the banking
+; itself, and presents the two $d000 banks as
+; one flat 16 kB range
+;
+;   logical $c000-$cfff = bank 1 $d000-$dfff
+;   logical $d000-$ffff = bank 2 $d000-$ffff
+;
+; so the ring above never has to know that the
+; area is banked at all.
 
-AUXUNDOLO	= AUXCACHEEND
-AUXUNDOEND	= $c000
-AUXUNDOPAGES	= (AUXUNDOEND-AUXUNDOLO)>>8
+AUXUNDOLO	= $c000		; logical
+AUXUNDOPAGES	= 256-(AUXUNDOLO>>8)
+AUXUNDOBANK2	= $d0		; logical page from
+				; which bank 2 serves
 
 ; ---- frontend zero page ----
 
@@ -260,8 +285,22 @@ u_count		= $027c	; snapshots stored
 u_head		= $027d	; index of the next slot
 u_ready		= $027e	; nonzero once sized
 u_dir		= $027f	; $80 = main to aux
-u_page		= $0280	; msb of the slot undomove
-			; is working on
+u_page		= $0280	; logical msb of the slot
+			; undomove is working on
+
+; undomove state.  It lives here, and not in
+; the zero page, because ALTZP swaps the zero
+; page out from under the copy loop while the
+; language card is banked in.  Page 2 is
+; unaffected by ALTZP.
+
+u_cur		= $0281	; logical page in flight
+u_auxhi		= $0282	; msb it is banked in at
+u_mainhi	= $0283	; msb on the main side
+u_full		= $0284	; whole pages still to go
+u_tail		= $0285	; bytes in the last page
+u_limit		= $0286	; bytes in this page,
+			; 0 meaning 256
 
 #if PRODOS || PRORWTS
 MACHID		= $bf98
@@ -1578,71 +1617,161 @@ loop
 
 	clc
 	adc	u_pages
-	bne	loop		; always, the sum
-				; stays below AUXUNDOEND
+	bne	loop		; always, the last
+				; slot ends at $ffff
 done
 	sta	u_page
 	rts
 	.)
 
 undomove
-	; input u_page = msb of the slot in
-	; auxiliary memory
+	; input u_page = logical msb of the slot
 	; input ioparam = address in main memory
+	; input u_size = bytes to copy
 	; input u_dir bit 7 set = main to aux
 	;
-	; The ROM move routine works through
-	; $3c-$43, and $40-$43 belong to the
-	; engine, so that range is saved.
+	; Copies a page at a time between main
+	; memory and the auxiliary language card.
+	;
+	; ALTZP brings in the auxiliary zero page
+	; and stack along with the language card,
+	; so between SETALTZP and CLRALTZP there
+	; is no zero page addressing, no stack
+	; traffic and no jsr.  The addresses ride
+	; in the copy loop itself and the counters
+	; sit on page 2, which ALTZP leaves alone.
+	; Everything else the loop touches is code
+	; below $c000, which ALTZP does not reach
+	; either.
+	;
+	; Interrupts stay off for the whole copy,
+	; because a ProDOS interrupt handler would
+	; come up on the wrong zero page.
 
 	.(
-	jsr	swapauxregs
+	lda	u_page
+	sta	u_cur
+	lda	ioparam+1
+	sta	u_mainhi
 
-	lda	#0		; slots are page
-				; aligned
+	lda	u_size+1
+	sta	u_full
+	lda	u_size+0
+	sta	u_tail
+
+	; The main side is not page aligned, so
+	; the two operands carry different low
+	; bytes.  Neither low byte ever changes --
+	; only the msbs walk, one page at a time.
+
 	bit	u_dir
-	bmi	toaux
+	bmi	tolow
 
-	sta	A1+0		; src in aux
-	lda	u_page
-	sta	A1+1
-	lda	ioparam+0	; dest in main
-	sta	A4+0
-	lda	ioparam+1
-	sta	A4+1
-	jmp	setend
-toaux
-	sta	A4+0		; dest in aux
-	lda	u_page
-	sta	A4+1
-	lda	ioparam+0	; src in main
-	sta	A1+0
-	lda	ioparam+1
-	sta	A1+1
-setend
-	; A2 = A1 + size - 1, inclusive
+	lda	#0		; aux is the source
+	sta	srclo
+	lda	ioparam+0
+	sta	dstlo
+	jmp	begin
+tolow
+	lda	ioparam+0
+	sta	srclo
+	lda	#0
+	sta	dstlo
+begin
+	php
+	sei
+	sta	SETALTZP
 
-	lda	A1+0
+	; ---- no zero page, no stack ----
+nextpg
+	lda	u_full
+	beq	lastpg
+
+	dec	u_full
+	lda	#0
+	sta	u_limit		; 0 means 256
+	beq	bank		; always
+lastpg
+	lda	u_tail
+	beq	done
+
+	sta	u_limit
+	lda	#0
+	sta	u_tail		; there is only one
+bank
+	; Bank in whichever half holds the logical
+	; page u_cur, and note the msb it shows up
+	; at.  Bank 1 is only reachable at its own
+	; $d000, so the low half of the ring is
+	; shifted up by the difference.
+
+	lda	u_cur
+	cmp	#AUXUNDOBANK2
+	bcs	two
+
 	clc
-	adc	u_size+0
-	sta	A2+0
-	lda	A1+1
-	adc	u_size+1
-	sta	A2+1
+	adc	#AUXUNDOBANK2-(AUXUNDOLO>>8)
+	sta	u_auxhi
+	bit	u_dir
+	bmi	wr1
 
-	lda	A2+0
-	sec
-	sbc	#1
-	sta	A2+0
-	lda	A2+1
-	sbc	#0
-	sta	A2+1
+	lda	LCRD1
+	lda	LCRD1
+	jmp	operands
+wr1
+	lda	LCWR1
+	lda	LCWR1
+	jmp	operands
+two
+	sta	u_auxhi
+	bit	u_dir
+	bmi	wr2
 
-	lda	u_dir
-	asl			; bit 7 to carry
-	jsr	AUXMOVE
+	lda	LCRD2
+	lda	LCRD2
+	jmp	operands
+wr2
+	lda	LCWR2
+	lda	LCWR2
+operands
+	bit	u_dir
+	bmi	frommain
 
-	jmp	swapauxregs
+	lda	u_auxhi
+	sta	srchi
+	lda	u_mainhi
+	sta	dsthi
+	jmp	copy
+frommain
+	lda	u_mainhi
+	sta	srchi
+	lda	u_auxhi
+	sta	dsthi
+copy
+	ldy	#0
+byte
+srclo	= *+1
+srchi	= *+2
+	lda	$ffff,y
+dstlo	= *+1
+dsthi	= *+2
+	sta	$ffff,y
+	iny
+	cpy	u_limit
+	bne	byte
+
+	inc	u_cur
+	inc	u_mainhi
+	jmp	nextpg
+done
+	sta	CLRALTZP
+
+	; ---- zero page and stack are back ----
+
+	lda	LCROM2		; rom in, the way a
+				; system program runs
+	plp
+	rts
 	.)
 
 #endif
