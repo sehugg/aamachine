@@ -34,13 +34,13 @@ c64_crunched.bin:	c64_frontend.bin decruncher.bin cruncher
 #			xa -XMASM -o $@ $<
 
 #a2_frontend.bin:	a2_frontend.s engine.s a2_rwts18.bin
-#			xa -l a2.labels -o $@ $< -DPRODOS=0 -DRWTS18=1 -DUNDO=1 -DSAVERESTORE=0 -DVERSION=\"$(VERSION)\"
+#			xa -l a2.labels -o $@ $< -DPRODOS=0 -DRWTS18=1 -DVERSION=\"$(VERSION)\"
 
 a2_prorwts2.bin:	a2_prorwts2.acme a2_frontend.bin
 			acme -DPRORWTS_ORG=$$(($$(wc -c < a2_frontend.bin) + 8192)) -l a2_prorwts2.sym -r a2_prorwts2.rpt $<
 
 a2_frontend.bin:	a2_frontend.s engine.s
-			xa -l a2.labels -P a2_frontend.lst -o $@ $< -DPRODOS=1 -DPRORWTS=0 -DSAVERESTORE=0 -DUNDO=1 -DVERSION=\"$(VERSION)\"
+			xa -l a2.labels -P a2_frontend.lst -o $@ $< -DPRODOS=1 -DPRORWTS=0 -DUNDO=0 -DSAVERESTORE=0 -DVERSION=\"$(VERSION)\"
 
 a2.system:		a2_frontend.bin a2_prorwts2.bin
 			cat a2_frontend.bin a2_prorwts2.bin > $@

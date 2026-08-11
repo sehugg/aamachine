@@ -1055,15 +1055,16 @@ io_restart
 	; away the undo history.
 
 	.(
+#if UNDO
 	lda	#0
 	sta	u_count
-
 	lda	#<AUXUNDOLO
 	sta	u_next+0
 	sta	u_old+0
 	lda	#>AUXUNDOLO
 	sta	u_next+1
 	sta	u_old+1
+#endif
 	rts
 	.)
 
@@ -1374,6 +1375,8 @@ io_load
 
 #endif
 
+#if UNDO
+
 ; =====================================
 ; Undo, in auxiliary memory
 ; =====================================
@@ -1654,38 +1657,6 @@ store
 	rts
 	.)
 
-swapauxregs
-	.(
-	ldx	#7
-save
-	lda	A1,x
-	pha
-	lda	auxregsbuf,x
-	sta	A1,x
-	pla
-	sta	auxregsbuf,x
-	dex
-	bpl	save
-	rts
-	.)
-
-#if PRORWTS
-swaprwregs
-	.(
-	ldx	#rwregs_count-1
-save
-	lda	rwregs_first,x
-	pha
-	lda	rwregsbuf,x
-	sta	rwregs_first,x
-	pla
-	sta	rwregsbuf,x
-	dex
-	bpl	save
-	rts
-	.)
-#endif
-
 undomove
 	; input u_tmp = address in aux memory
 	; input ioparam = address in main memory
@@ -1745,9 +1716,55 @@ setend
 	jmp	swapauxregs
 	.)
 
+#else // UNDO
+
+io_undosupp
+io_loadundo
+	.(
+	clc
+	rts
+	.)
+
+io_saveundo
+
+#endif
+
 ; =====================================
 ; Storage
 ; =====================================
+
+swapauxregs
+	.(
+	ldx	#7
+save
+	lda	A1,x
+	pha
+	lda	auxregsbuf,x
+	sta	A1,x
+	pla
+	sta	auxregsbuf,x
+	dex
+	bpl	save
+	rts
+	.)
+
+#if PRORWTS
+swaprwregs
+	.(
+	ldx	#rwregs_count-1
+save
+	lda	rwregs_first,x
+	pha
+	lda	rwregsbuf,x
+	sta	rwregs_first,x
+	pla
+	sta	rwregsbuf,x
+	dex
+	bpl	save
+	rts
+	.)
+#endif
+
 
 auxslot
 	; input f_temp = virtual page, l-e word
@@ -2460,8 +2477,10 @@ auxclrlp
 	sta	stxoffs
 	sta	cury
 	sta	strow
+#if UNDO
 	sta	u_ready
 	sta	u_count
+#endif
 
 	lda	#$e1
 	sta	seed+0
@@ -2712,7 +2731,14 @@ nofile
 txt_banner
 	.asc	"Aa-machine "
 	.asc	VERSION
-	.asc	0
+	.asc	" (ProDOS"
+#if UNDO
+	.asc	"+undo"
+#endif
+#if SAVERESTORE
+	.asc	"+save"
+#endif
+	.asc	")",0
 
 txt_nostory
 	.asc	"Insert story disk and press a key.",10,0
