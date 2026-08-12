@@ -1410,7 +1410,7 @@ sv_name
 	.byt	8
 	.asc	"SAVEFILE"
 
-#elsif SAVERESTORE
+#elseif PRODOS && SAVERESTORE
 
 io_save
 io_load
