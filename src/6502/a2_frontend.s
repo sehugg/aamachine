@@ -1142,9 +1142,12 @@ noeor
 ; segment that opens it the first time.
 ; TODO only if SAVERESTORE is defined
 
-pathname
+pathname_full
 	.byt	5+8+2
 	.asc	"/AA.STORY/STORY"
+pathname_short
+	.byt	5
+	.asc	"STORY"
 
 ; =====================================
 ; Saved games
@@ -1300,22 +1303,22 @@ fail
 	rts
 	.)
 
+p_open_save
+	.byt	3
+	.word	sv_name
+	.word	FILEBUF
+	.byt	0
+
 opensave
 	; output c = error
-
 	.(
-	lda	#<sv_name
-	sta	p_open+1
-	lda	#>sv_name
-	sta	p_open+2
-
 	lda	#$c8		; OPEN
-	ldx	#<p_open
-	ldy	#>p_open
+	ldx	#<p_open_save
+	ldy	#>p_open_save
 	jsr	mlicall
 	bcs	done
 
-	lda	p_open+5
+	lda	p_open_save+5
 	sta	p_rw+1
 	sta	p_eof+1
 	clc
@@ -1356,11 +1359,6 @@ reopenstory
 	; as fatal as any other disk error.
 
 	.(
-	lda	#<pathname
-	sta	p_open+1
-	lda	#>pathname
-	sta	p_open+2
-
 	lda	#$c8		; OPEN
 	ldx	#<p_open
 	ldy	#>p_open
@@ -2702,6 +2700,17 @@ retry
 	ldy	#>p_open
 	jsr	mlicall
 	bcc	opened
+; retry with full volume name
+	lda	#<pathname_full
+	sta	p_open+1
+	lda	#>pathname_full
+	sta	p_open+2
+
+	lda	#$c8		; OPEN
+	ldx	#<p_open
+	ldy	#>p_open
+	jsr	mlicall
+	bcc	opened
 
 	ldx	#<txt_nostory
 	ldy	#>txt_nostory
@@ -2721,7 +2730,7 @@ opened
 parmsrc
 	; p_open
 	.byt	3
-	.word	pathname
+	.word	pathname_short
 	.word	FILEBUF
 	.byt	0
 	; p_read
@@ -2747,9 +2756,9 @@ nparm = *-parmsrc
 openstory
 	.(
 	jsr	swaprwregs
-        lda     #<pathname
+        lda     #<pathname_short
         sta     prorwts_namlo
-        lda     #>pathname
+        lda     #>pathname_short
         sta     prorwts_namhi
 	lda	#0
 	sta	prorwts_sizelo
