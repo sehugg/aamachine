@@ -2674,22 +2674,16 @@ banner
 #if PRODOS
 openstory
 	.(
-retry
-	lda	#$c8		; OPEN
-	ldx	#<p_open
-	ldy	#>p_open
-	jsr	mlicall
+	jsr	tryopen
 	bcc	opened
 ; retry with full volume name
+retry
 	lda	#<pathname_full
 	sta	p_open+1
 	lda	#>pathname_full
 	sta	p_open+2
 
-	lda	#$c8		; OPEN
-	ldx	#<p_open
-	ldy	#>p_open
-	jsr	mlicall
+	jsr	tryopen
 	bcc	opened
 
 	ldx	#<txt_nostory
@@ -2702,6 +2696,11 @@ opened
 	sta	p_read+1
 	sta	p_mark+1
 	rts
+tryopen
+	lda	#$c8		; OPEN
+	ldx	#<p_open
+	ldy	#>p_open
+	jmp	mlicall
 	.)
 
 ; Image of the MLI parameter blocks, copied
