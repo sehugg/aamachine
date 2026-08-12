@@ -107,10 +107,9 @@
 ;   https://savagetaylor.com/til/TA33130.html
 ;
 ; TODO
-; - 2-disk mode - "STORY-xx-yy"
 ; - use the packer instead of boot mover
-; - PRORWTS memory map shadows the 6502 vectors
-	; - RWTS18 non-ProDOS verison using lang card RAM
+; - fix ProRWTS undo/save/restore
+; - RWTS18 version?
 
 DEFWIDTH	= 80
 
@@ -119,6 +118,13 @@ PRSHIFT		= 0
 HAVE_QUIT	= 0	; we don't have BASIC.SYSTEM
 HAVE_STATUS	= 1
 HAVE_STYLE	= 0
+#if PRORWTS
+SAVERESTORE	= 1
+UNDO		= 1
+#else
+SAVERESTORE	= 1
+UNDO		= 1
+#endif
 
 TRACE_INST	= 0
 TRACE_STORE	= 0
@@ -332,12 +338,27 @@ FILEBUF		= $bb00
 
 #define A2_ENGINE_HIMEM		; some of engine gets put at $d000-$ffff
 
-#define ROMCALL(addr)		bit $c082:jsr addr:bit $c088
+#define ROMCALL(addr)		bit LCROM2:jsr addr:bit LCRD1
 #define ROMTAILCALL(addr)	ROMCALL(addr):rts
+
+; ProRWTS2 lives in bank 2 and writes to its own
+; buffers up there, so it needs the bank write
+; enabled, which takes two reads of the switch.
+
+#define RWTSCALL(addr)		lda LCWR2:lda LCWR2:jsr addr:lda LCRD1
 
 next_rpagelo	= $029e
 next_rpagehi	= $029f
-rwregsbuf	= $02a0	; PRORWTS zero-page save
+rwregsbuf	= $02a0	; PRORWTS zero-page save,
+			; rwregs_count bytes
+
+; Arguments for rwts_openfile.  opendir runs the
+; transfer as part of the open, so command, size
+; and buffer all have to be set before the call.
+
+sv_cmd		= $02cd	; 0 seek, 1 read, 2 write
+sv_size		= $02ce	; word, bytes to transfer
+sv_addr		= $02d0	; word, main memory buffer
 
 rwregs_first	= $3b
 rwregs_last	= $67
@@ -373,6 +394,8 @@ boot_entry
 	sei
 	cld
 #if PRORWTS
+	; we have to call prorwts2_init here first,
+	; before we copy over ProDOS in the language card
 	jsr	prorwts2_init	; TODO check status?
 #endif
 	ldx	#moverlen
@@ -417,11 +440,16 @@ himemsegsec = engine_reloc + $2000 - $800 + boothdrlen
 	lda	#$d0
 	sta	$03		; dest = $d000
 
-	lda	$C08B		; write lc_bank = 1
-	lda	$C08B
-	ldx	#$30
+	lda	LCWR1		; write lc_bank = 1
+	lda	LCWR1
+
+	; exactly the himem segment, so that
+	; whatever is above it -- including the
+	; vectors at $fffa -- is left alone
+
+	ldx	#(himem_end-himem_start+$ff)>>8
 	jsr	pageloop
-	lda	$C088		; read lc_bank = 1
+	lda	LCRD1		; read lc_bank = 1
 
 initsegsec = initsegment + $2000 - $800 + boothdrlen + himem_end - himem_start
 	lda	#<initsegsec
@@ -1408,14 +1436,129 @@ sv_name
 	.byt	8
 	.asc	"SAVEFILE"
 
-#elseif PRODOS && SAVERESTORE
+#elseif PRORWTS && SAVERESTORE
+
+; One slot, a file called SAVEFILE alongside
+; STORY.  ProRWTS2 can only write to a file that
+; is already there and it cannot change the
+; length, so the bundler puts a SAVEMAXBYTES long
+; SAVEFILE on the disk and a save overwrites it
+; in place.  A save that would not fit is
+; refused rather than truncated.
+;
+; Transfers happen in whole 512 byte blocks --
+; opendir rounds the size up itself -- so a save
+; carries some slack at the end.  Nothing reads
+; it, the length inside the AASV header says
+; where the image really stops.
 
 io_save
-io_load
+	; input x = size lsb
+	; input y = size msb
+	; data at SAVEADDR
+	; output c = success
+
 	.(
+	stx	sv_size+0
+	sty	sv_size+1
+
+	; the file on disk cannot grow, so a
+	; bigger image than that has nowhere
+	; to go
+
+	lda	#<SAVEMAXBYTES
+	cmp	sv_size+0
+	lda	#>SAVEMAXBYTES
+	sbc	sv_size+1
+	bcc	fail
+
+	lda	#2		; cmdwrite
+	jsr	savexfer
+	bne	fail
+
+	sec
+	rts
+fail
 	clc
 	rts
 	.)
+
+io_load
+	; verify AASV header, 12 bytes
+	; if ok, put file at SAVEADDR
+	; and set c
+	; otherwise, clear c
+
+	.(
+	; the whole file, since its length is
+	; what the bundler wrote and not what
+	; the last save happened to be
+
+	lda	#<SAVEMAXBYTES
+	sta	sv_size+0
+	lda	#>SAVEMAXBYTES
+	sta	sv_size+1
+
+	lda	#1		; cmdread
+	jsr	savexfer
+	bne	fail
+
+	; bytes 6 and 7 are the length; the rest
+	; of the header is a fixed signature.  An
+	; unwritten SAVEFILE is all zeroes and
+	; fails here.
+
+	ldy	#11
+check
+	cpy	#6
+	bcc	compare
+
+	cpy	#8
+	bcc	skip
+compare
+	lda	SAVEADDR,y
+	cmp	form0000aasv,y
+	bne	fail
+skip
+	dey
+	bpl	check
+
+	sec
+	rts
+fail
+	clc
+	rts
+	.)
+
+savexfer
+	; input a = prorwts command
+	; input sv_size = byte count
+	; output a = status, z set on success
+	;
+	; Moves the savefile to or from SAVEADDR
+	; and puts STORY back, because ProRWTS2
+	; has room for one open file at a time.
+
+	.(
+	sta	sv_cmd
+	lda	#<SAVEADDR
+	sta	sv_addr+0
+	lda	#>SAVEADDR
+	sta	sv_addr+1
+
+	ldx	#<sv_name
+	ldy	#>sv_name
+	jsr	rwts_openfile
+
+	pha
+	jsr	reopenstory
+	pla			; sets z for the caller
+	rts
+	.)
+
+sv_name
+	.byt	8
+	.asc	"SAVEFILE"
 
 #endif
 
@@ -1763,9 +1906,12 @@ done
 	sta	CLRALTZP
 
 	; ---- zero page and stack are back ----
-
+#if PRODOS
 	lda	LCROM2		; rom in, the way a
 				; system program runs
+#elseif PRORWTS
+	lda	LCRD1		; ram in, for ProRWTS2
+#endif
 	plp
 	rts
 	.)
@@ -1942,7 +2088,7 @@ norewind
         sta     prorwts_reqcmd
         sta     prorwts_sizelo
 	lda	seekoffset+1
-	bpl	nobigseek
+	beq	nobigseek
 ; big seek = $ff00 bytes
 #ifdef DEBUGIO
 	lda	#'B'
@@ -1956,10 +2102,7 @@ norewind
 	lda	#0
 	adc	next_rpagehi
 	sta	next_rpagehi
-        lda	$C083		; write lc_bank=2
-        lda	$C083
-        jsr     prorwts_rdwrpart
-        lda	$C088		; read lc_bank=1
+	RWTSCALL(prorwts_rdwrpart)
 	jmp	redoseek	; recompute
 nobigseek
 	lda	seekoffset
@@ -1967,10 +2110,7 @@ nobigseek
 #ifdef DEBUGIO
 	jsr	prbyte
 #endif
-        lda	$C083		; write lc_bank=2
-        lda	$C083
-        jsr     prorwts_rdwrpart
-        lda	$C088		; read lc_bank=1
+	RWTSCALL(prorwts_rdwrpart)
 noseek
 	lda     rp_page
 	sta	prorwts_ldrhi
@@ -1980,10 +2120,7 @@ noseek
         lda     #0
         sta     prorwts_sizelo
 	sta	prorwts_ldrlo
-        lda	$C083		; write lc_bank=2
-        lda	$C083
-        jsr     prorwts_rdwrpart
-        lda	$C088		; read lc_bank=1
+	RWTSCALL(prorwts_rdwrpart)
 
 	ldy	prorwts_status
 	jsr	swaprwregs
@@ -2057,6 +2194,92 @@ rwts_rewind
 	; next page read will be 0
 	sta	next_rpagelo
 	sta	next_rpagehi
+	rts
+	.)
+
+rwts_openfile
+	; input x = pathname lsb
+	; input y = pathname msb
+	; input sv_cmd = command
+	; input sv_size = byte count
+	; input sv_addr = main memory buffer
+	; output a = status, z set on success
+	;
+	; opendir falls through into the transfer,
+	; so one call both opens the file and moves
+	; the data.  A command of zero moves
+	; nothing and just opens.
+	;
+	; Bit 7 of the command picks the drive in
+	; the slot during an open, and is clear
+	; here -- that is the hook for two-drive
+	; operation.
+
+	.(
+	stx	f_temp
+	sty	f_temp2
+
+	jsr	swaprwregs
+
+	lda	f_temp
+	sta	prorwts_namlo
+	lda	f_temp2
+	sta	prorwts_namhi
+	lda	sv_cmd
+	sta	prorwts_reqcmd
+	lda	sv_size+0
+	sta	prorwts_sizelo
+	lda	sv_size+1
+	sta	prorwts_sizehi
+	lda	sv_addr+0
+	sta	prorwts_ldrlo
+	lda	sv_addr+1
+	sta	prorwts_ldrhi
+
+	RWTSCALL(prorwts_opendir)
+
+	; opendir leaves the file positioned at
+	; the start, so the reader has to agree.
+	; This has to happen while the ProRWTS
+	; registers are still swapped in.
+
+	jsr	rwts_rewind
+
+	ldy	prorwts_status
+	jsr	swaprwregs
+	tya
+	rts
+	.)
+
+reopenstory
+	; ProRWTS2 keeps one file open, so STORY
+	; has to come back after every save and
+	; load.  Losing it would leave nothing to
+	; go back to, so a failure is as fatal as
+	; any other disk error.
+
+	.(
+	jsr	storyparms
+	jsr	rwts_openfile
+	beq	done
+
+	jmp	diskerror
+done
+	rts
+	.)
+
+storyparms
+	; open STORY, transferring nothing
+
+	.(
+	lda	#0
+	sta	sv_cmd		; cmdseek
+	sta	sv_size+0
+	sta	sv_size+1
+	sta	sv_addr+0
+	sta	sv_addr+1
+	ldx	#<pathname_short
+	ldy	#>pathname_short
 	rts
 	.)
 #endif
@@ -2739,39 +2962,31 @@ nparm = *-parmsrc
 #if PRORWTS
 openstory
 	.(
-	jsr	swaprwregs
-        lda     #<pathname_short
-        sta     prorwts_namlo
-        lda     #>pathname_short
-        sta     prorwts_namhi
-	lda	#0
-	sta	prorwts_sizelo
-	sta	prorwts_ldrlo	; TODO remove?
-	sta	prorwts_sizehi
-	sta	prorwts_ldrhi
-        lda	$C083		; write lc_bank=2
-        lda	$C083
-        jsr	prorwts_opendir
-        lda	$C088		; read lc_bank=1
-	; reset seek pos to 0
-	jsr	rwts_rewind
-	ldy	prorwts_status
-	jsr	swaprwregs
-	tya
-	bne	nofile
-	rts
-nofile
+retry
+	jsr	storyparms
+	jsr	rwts_openfile
+	beq	opened
+
 	ldx	#<txt_nostory
 	ldy	#>txt_nostory
 	jsr	putline
-	jmp	diskerror	; TODO
+	jsr	io_getc
+	jmp	retry
+opened
+	rts
 	.)
 #endif
 
 txt_banner
 	.asc	"Aa-machine "
 	.asc	VERSION
+#if PRODOS
 	.asc	" (ProDOS"
+#elseif PRORWTS
+	.asc	" (ProRWTS2"
+#else
+	.asc	"(
+#endif
 #if UNDO
 	.asc	"+undo"
 #endif
