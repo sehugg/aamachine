@@ -2468,32 +2468,14 @@ loop
 ; Everything from here on is overwritten by
 ; page buffers once the engine is running.
 
-putstr
+putline
 	; input x/y = string, l/h
 	; plain ascii, nul terminated
-
 	.(
-	stx	strptr+0
-	sty	strptr+1
-	ldy	#0
-loop
-	sty	f_temp
-	lda	(strptr),y
-	beq	done
-
-	cmp	#10
-	bne	nonl
-
-	jsr	io_mline
-	jmp	next
-nonl
-	jsr	io_mputc
-next
-	ldy	f_temp
-	iny
-	bne	loop
-done
-	jmp	io_mflush
+	jsr	puts_xy
+	lda	#SPC_AUTO
+	sta	rspc
+	jmp	vio_line
 	.)
 
 initsystem
@@ -2685,7 +2667,7 @@ banner
 	.(
 	ldx	#<txt_banner
 	ldy	#>txt_banner
-	jsr	putstr
+	jsr	putline
 
 	jsr	io_mline
 	jmp	io_mline
@@ -2714,7 +2696,7 @@ retry
 
 	ldx	#<txt_nostory
 	ldy	#>txt_nostory
-	jsr	putstr
+	jsr	putline
 	jsr	io_getc
 	jmp	retry
 opened
@@ -2779,7 +2761,7 @@ openstory
 nofile
 	ldx	#<txt_nostory
 	ldy	#>txt_nostory
-	jsr	putstr
+	jsr	putline
 	jmp	diskerror	; TODO
 	.)
 #endif
