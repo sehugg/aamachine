@@ -88,8 +88,8 @@ aambundle.exe: aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c \
 table_a2terp.h:		6502 6502/a2.system mkheader
 			./mkheader table_a2terp <6502/a2.system >$@
 
-table_a2license.h:	6502 6502/a2_license.txt mkheader
-			./mkheader table_a2license <6502/a2_license.txt >$@
+table_a2license.h:	6502 6502/license.txt mkheader
+			./mkheader table_a2license <6502/license.txt >$@
 
 table_c64license.h:	6502 6502/license.txt mkheader
 			./mkheader table_c64license <6502/license.txt >$@
