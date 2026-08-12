@@ -8185,9 +8185,13 @@ ext0_restore
 	adc	SAVEADDR+6
 	sta	physize+1
 
+#ifdef A2_EVICT_MAX
+	ldx	#>(SAVEADDR+SAVEMAXBYTES)
+#else
 	tax
 	lda	physize
 	bne	unmap1
+#endif
 unmap
 	dex
 unmap1
