@@ -74,10 +74,10 @@
 ;
 ; Main memory map (ProRWTS2)
 ; =====================================
-;  0800 - 1800	interpreter code
-;  1800 - bfff  heap / data
-;  d000 - ffff  interpreter code (bank 1)
-;  d000 - d???  PRORWTS (bank 2)
+;  0800 - 2000	interpreter code
+; ~2000 - bfff  heap / data
+;  d000 - f800  interpreter code (bank 1)
+;  d000 - daff  PRORWTS (bank 2)
 ;
 ; 0boot Version (TODO)
 ;
@@ -436,9 +436,7 @@ initsegsec = initsegment + $2000 - $800 + boothdrlen + himem_end - himem_start
 
 	ldx	#SAFEPG-$8
 	jsr	pageloop
-#if PRORWTS
 	jsr	swaprwregs	; load prorwts registers into save bank
-#endif
 #endif
 	jmp	coldstart
 
