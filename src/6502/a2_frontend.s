@@ -2786,8 +2786,9 @@ RAMEND = $bb00
 RAMEND = $c000
 #endif
 
-SAFEPG = (* + $ff) >> 8
-SAVEADDR = SAFEPG << 8
+SAFEPG = (* + $ff) >> 8		; after init routines
+
+SAVEADDR = initsegment		; over init routines
 
 ; this library is at the end of the file
 ; but it does not have to be moved, it will
