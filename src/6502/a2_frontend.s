@@ -108,7 +108,9 @@
 ;
 ; TODO
 ; - use the packer instead of boot mover
-; - fix ProRWTS undo/save/restore
+; - fix ProRWTS save/restore
+; - ProRWTS two-disk mode
+; - ProRWTS boot loader
 ; - RWTS18 version?
 
 DEFWIDTH	= 80
@@ -121,6 +123,7 @@ HAVE_STYLE	= 0
 #if PRORWTS
 SAVERESTORE	= 1
 UNDO		= 1
+#define A2_EVICT_MAX 1
 #else
 SAVERESTORE	= 1
 UNDO		= 1
