@@ -1,4 +1,4 @@
-Å-machine 6502 C64 Interpreter
+Å-machine 6502 C64 / Apple II Interpreter
 Copyright 2019-2026 Linus Åkesson and the Dialog Project
 
 Redistribution and use in source and binary forms, with or without

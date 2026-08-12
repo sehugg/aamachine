@@ -8,6 +8,7 @@ The following interpreters are included:
 	* Javascript engine, web frontend.
 	* Javascript engine, Node.js frontend.
 	* 6502 engine, Commodore 64 frontend.
+	* 6502 engine, Apple II+ and //e frontend.
 	* 6502 engine, aambox6502 frontend.
 
 Version number:

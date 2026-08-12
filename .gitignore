@@ -11,3 +11,8 @@ aambox6502
 src/6502/cruncher
 src/6502/labels
 src/6502/mkfont
+src/6502/*.lst
+src/6502/*.rpt
+src/6502/*.sym
+src/6502/*.labels
+src/6502/a2.system
