@@ -2213,7 +2213,7 @@ coldstart
 #ifdef DEBUG
 	jsr	dumpvars
 #endif
-	jsr	clrwin
+	jsr	io_mclear
 	jmp	startengine
 	.)
 
