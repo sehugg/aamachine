@@ -398,12 +398,6 @@ ext
 	jmp	clrupper
 	.)
 
-#ifdef A2_ENGINE_HIMEM
-engine_reloc = *
-* = $d000
-himem_start = *
-#endif
-
 vio_line
 	.(
 	lda	rspc
@@ -2155,6 +2149,12 @@ listdone
 	sta	result+0
 	rts
 	.)
+
+#ifdef A2_ENGINE_HIMEM
+engine_reloc = *
+* = $d000
+himem_start = *
+#endif
 
 error
 	.(
