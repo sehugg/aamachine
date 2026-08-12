@@ -2213,6 +2213,7 @@ coldstart
 #ifdef DEBUG
 	jsr	dumpvars
 #endif
+	jsr	clrwin
 	jmp	startengine
 	.)
 
@@ -2666,7 +2667,11 @@ banner
 	ldx	#<txt_banner
 	ldy	#>txt_banner
 	jsr	putline
-
+	bit	auxram
+	bmi	yesauxram
+	lda	#0
+	sta	txt_128k
+yesauxram
 	jsr	io_mline
 	jmp	io_mline
 	.)
@@ -2773,7 +2778,9 @@ txt_banner
 #if SAVERESTORE
 	.asc	"+save"
 #endif
-	.asc	")",0
+	.asc	")"
+txt_128k
+	.asc	" 128K",0
 
 txt_nostory
 	.asc	"Insert story disk and press a key.",10,0
