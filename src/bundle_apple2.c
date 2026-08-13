@@ -77,6 +77,23 @@ static char storyname[48];
 #define BLOCKS_800K		1600
 #define BLOCKS_PER_TRACK	8
 
+/* A 5.25" disk holds 35 tracks of 16 physical sectors, and there are two
+ * conventions for storing them in a file.  A .po image is a plain run of
+ * ProDOS blocks, which is what we build; a .dsk image holds the same sectors
+ * in DOS 3.3 order within each track, which is what most emulators and
+ * disk-writing tools expect from a 5.25" image, so that is what we ship.
+ * 3.5" disks have no such split and stay .po.
+ *
+ * Indexed by DOS logical sector, giving the ProDOS logical sector that holds
+ * the same physical sector.  The table happens to be its own inverse. */
+#define SECTOR_SIZE		256
+#define SECTORS_PER_TRACK	16
+#define TRACK_SIZE		(SECTOR_SIZE * SECTORS_PER_TRACK)
+
+static const int dos_order[SECTORS_PER_TRACK] = {
+	0, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 15
+};
+
 /* ProRWTS2 can neither create a file nor change the length of one, so a
  * savefile has to be on the disk already, at its full size, for a save to
  * overwrite in place.  An all-zero one has no AASV header, which is how the
@@ -650,6 +667,27 @@ static void vol_write_bitmap(struct volume *v) {
 	}
 }
 
+/* Writes the volume image out, reordering the sectors of every track into DOS
+ * 3.3 order for a .dsk.  Returns 0, or -1 on a write error. */
+static int write_image(FILE *f, const uint8_t *image, size_t size, int dsk) {
+	size_t track;
+	int i;
+
+	if(!dsk) {
+		return (1 == fwrite(image, size, 1, f))? 0 : -1;
+	}
+	for(track = 0; track < size; track += TRACK_SIZE) {
+		for(i = 0; i < SECTORS_PER_TRACK; i++) {
+			if(1 != fwrite(image + track
+				+ (size_t) dos_order[i] * SECTOR_SIZE,
+				SECTOR_SIZE, 1, f)) {
+				return -1;
+			}
+		}
+	}
+	return 0;
+}
+
 /* Builds a volume holding the given files and writes it out.  Returns 0, or
  * -1 if they do not all fit, in which case nothing is written. */
 static int build_disk(char *dirname, const char *leaf, const char *volname, int total_blocks, const uint8_t *boot, size_t bootsize, int first_data, const struct diskfile *files, int nfiles) {
@@ -687,7 +725,8 @@ static int build_disk(char *dirname, const char *leaf, const char *volname, int 
 		fprintf(stderr, "%s: %s\n", filename, strerror(errno));
 		exit(1);
 	}
-	if(1 != fwrite(vol.image, (size_t) total_blocks * BLOCK_SIZE, 1, f)) {
+	if(write_image(f, vol.image, (size_t) total_blocks * BLOCK_SIZE,
+		total_blocks == BLOCKS_140K)) {
 		fprintf(stderr, "%s: %s\n", filename, strerror(errno));
 		exit(1);
 	}
@@ -911,13 +950,13 @@ static void write_readme(char *dirname, int mode, const char *single, const char
 
 /* ---------------------------------------------------------------- bundle */
 
-static char *disk_name(const char *suffix) {
+static char *disk_name(const char *suffix, const char *ext) {
 	char *name;
 	size_t size;
 
-	size = strlen(storyname) + strlen(suffix) + 8;
+	size = strlen(storyname) + strlen(suffix) + strlen(ext) + 2;
 	name = malloc(size);
-	snprintf(name, size, "%s%s.po", storyname, suffix);
+	snprintf(name, size, "%s%s%s", storyname, suffix, ext);
 	return name;
 }
 
@@ -967,7 +1006,7 @@ static int build_800k(char *dirname, const struct diskfile *aam, const struct di
 
 	/* The 800k disk boots ProDOS, but AAM.SYSTEM still reaches the disk
 	 * through ProRWTS2, so it needs the same pre-made savefile. */
-	*bigdisk = disk_name("-800k");
+	*bigdisk = disk_name("-800k", ".po");
 	if(build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
 		img, 2 * BLOCK_SIZE, 0, files, 4)
 	&& build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
@@ -1001,7 +1040,7 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 
 	files[2] = savefile;
 
-	*single = disk_name("");
+	*single = disk_name("", ".dsk");
 	if(!build_disk(dirname, *single, "AA.STORY", BLOCKS_140K,
 		table_a20boot, sizeof(table_a20boot), BOOT0_FIRST_DATA,
 		files, 3)) {
@@ -1026,7 +1065,7 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 	 * boot blocks so that booting it by mistake gives ProDOS's own "unable
 	 * to load" message, but 0boot's would try to load an interpreter that
 	 * is not there, so it gets none, and the block back. */
-	*storydisk = disk_name("-story");
+	*storydisk = disk_name("-story", ".dsk");
 
 	if(build_disk(dirname, *storydisk, "AA.STORY", BLOCKS_140K,
 		0, 0, 0, files + 1, 1)) {
@@ -1043,7 +1082,7 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 	bootfiles[0] = files[0];
 	bootfiles[1] = savefile;
 
-	*bootdisk = disk_name("-boot");
+	*bootdisk = disk_name("-boot", ".dsk");
 	if(build_disk(dirname, *bootdisk, "AA.BOOT", BLOCKS_140K,
 		table_a20boot, sizeof(table_a20boot), BOOT0_FIRST_DATA,
 		bootfiles, 2)) {
