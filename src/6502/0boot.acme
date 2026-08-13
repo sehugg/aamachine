@@ -6,12 +6,22 @@
 !cpu 6502
 ;!to "0boot",plain
 *=$800
-        tracks    = $d1         ;user-defined
+        ;Configured for the A-machine.  AAM.SYSTEM is laid out at the
+        ;start of track 1 of a ProDOS-order disk, so whole tracks of it
+        ;are four consecutive kilobytes of the file.  It is loaded where
+        ;ProDOS would have loaded it, and entered at $2003 rather than
+        ;$2000 so the interpreter knows there is no ProDOS underneath.
+        ;A2_TRACKS comes from the Makefile, which rounds the size of
+        ;a2.system up to whole tracks.
+
+        !ifndef A2_TRACKS { A2_TRACKS = 5 }
+
+        tracks    = A2_TRACKS   ;user-defined
         first_trk = $01         ;user-defined
-        address   = $d1         ;user-defined, high byte of first page
-        entry     = $d1d1       ;user-defined
+        address   = $20         ;user-defined, high byte of first page
+        entry     = $2003       ;user-defined
         sectors   = $00         ;user-defined, sectors to load from partial track (increase tracks count first)
-        interleave= 0           ;user-defined, to retain .dsk sector ordering
+        interleave= 1           ;user-defined, to retain .dsk sector ordering
         multi_regn= 0           ;user-defined, load to non-sequential addresses
         !if multi_regn=1 {
           !macro region {region !byte $d1,0,$d1,0,$d1,0,$d1,0,$d1,0,$d1,0,$d1,0,$d1,0,$d1,0,$d1,0,$d1,0,$d1,0}
@@ -169,7 +179,13 @@ preread         ;must exit with carry set!
         rts
 
 !if interleave=1 {
-sectbl !byte 0,7,$e,6,$d,5,$c,4,$b,3,$a,2,9,1,8,$f
+;ProDOS sector order.  ProDOS lays its logical sectors down with a 2:1
+;interleave, 0,2,4,6,8,$a,$c,$e,1,3,5,7,9,$b,$d,$f, and the boot PROM
+;matches $3d against the sector number in the address field -- so what
+;goes here is the inverse of that, physical sector to position within
+;the track.  (Not the $0,$e,$d... table, which converts between .dsk
+;and .po orderings and is a different thing entirely.)
+sectbl !byte 0,8,1,9,2,$a,3,$b,4,$c,5,$d,6,$e,7,$f
 }
 !if multi_regn=1 {
 +region
@@ -321,6 +337,16 @@ setdelay
 
 driveoff
         ;place post-read routine here
+
+        ;ProRWTS2 wants to know which drive it was booted from, and
+        ;normally reads it out of the ProDOS global page.  The slot is
+        ;already sitting in the patched PHASEOFF address, as $C0s0, and
+        ;DEVNUM wants it as s0 with the drive in bit 7 -- so drive 1 of
+        ;the boot slot is just those four bits on their own.
+
+        lda     <(slotpatch6+1)
+        and     #$70
+        sta     $bf30           ;DEVNUM
 
 slotpatch8
         lda     $c0d1
