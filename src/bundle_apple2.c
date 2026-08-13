@@ -36,6 +36,13 @@
  * STORY is read through the MLI a page at a time and never loaded whole,
  * so its file type should be $06 (binary)
  *
+ * SAVEFILE is an empty 4 kB file on the boot volume.  ProRWTS2 can only write
+ * to a file that already exists, and cannot change its length, so the
+ * interpreter overwrites this one in place instead of creating a savefile.
+ * When a story fills a 140k disk to the point where the savefile no longer
+ * fits, the single disk is built without one and a two-disk set is built
+ * alongside it, so there is always a way to save.
+ *
  * IMPORTANT:
  * The disk volume containing the story file must be named "AA.STORY"
  * but it need not be the same as the boot/interpreter volume.
@@ -69,6 +76,14 @@ static char storyname[48];
 #define BLOCKS_140K		280
 #define BLOCKS_800K		1600
 #define BLOCKS_PER_TRACK	8
+
+/* ProRWTS2 can neither create a file nor change the length of one, so a
+ * savefile has to be on the disk already, at its full size, for a save to
+ * overwrite in place.  An all-zero one has no AASV header, which is how the
+ * interpreter tells "never saved" from a real savefile.
+ * (This should be the same as SAVEMAXBYTES in engine.s)
+ */
+#define SAVEFILE_BYTES		4096
 
 /* 0boot's two stages go where ProDOS puts its own.  The boot PROM reads
  * physical sector 0 into $800 and hands over with $3d already at 1, so 0boot's
@@ -393,6 +408,14 @@ struct diskfile {
 	uint16_t	aux;
 };
 
+/* An unwritten savefile is all zeroes, which is exactly what the interpreter
+ * expects to find before the first save. */
+static const uint8_t blank_savefile[SAVEFILE_BYTES];
+
+static const struct diskfile savefile = {
+	"SAVEFILE", blank_savefile, SAVEFILE_BYTES, TYPE_BIN, 0
+};
+
 static uint32_t prodos_now(void) {
 	time_t now = time(0);
 	struct tm *tm = localtime(&now);
@@ -685,49 +708,38 @@ static int build_disk(char *dirname, const char *leaf, const char *volname, int 
 /* ---------------------------------------------------------------- readme */
 
 enum {
-	DISKS_SINGLE,
-	DISKS_SPLIT,
-	DISKS_BIGONLY
+	DISKS_SINGLE,	/* one disk, savefile and all */
+	DISKS_BOTH,	/* one disk without a savefile, or two disks with */
+	DISKS_SPLIT,	/* two disks, the story does not fit on one */
+	DISKS_BIGONLY	/* 800k only, the story does not fit on a floppy */
 };
 
 static const char readme_head[] =
 "Aa-machine for the Apple II family\n"
 "==================================\n"
 "\n"
-"This directory holds the two files that go on a ProDOS disk:\n"
-"\n"
-"  AAM.SYSTEM   the interpreter.  ProDOS file type SYS ($ff),\n"
-"               auxiliary type (load address) $2000.\n"
-"\n"
-"  STORY        the story file.  ProDOS file type BIN ($06)\n"
-"               is a reasonable choice.  The name must be STORY,\n"
-"               in the volume directory, because that is the\n"
-"               pathname the interpreter opens.\n"
-"\n"
-"IMPORTANT:\n"
-"The disk volume containg the story file must be named AA.STORY\n"
-"and may be a different volume than the boot disk.\n"
+"This directory holds bootable disk images for the story, together with\n"
+"the files they were built from.\n"
 "\n"
 "System Requirements\n"
 "-------------------\n"
 "\n"
-"Requires 64 kB and ProDOS 8.\n"
+"Requires 64 kB.  The 140 kB disks boot by themselves and need no\n"
+"ProDOS; the 800 kB disk boots ProDOS 8.\n"
+"\n"
 "The interpreter identifies the machine at boot and adapts to it:\n"
 "\n"
 "  Apple ][+            40 columns, upper case only\n"
 "  //e / //c / IIgs     80 columns when an 80-column card is present\n"
 "  128 kB machines      additional page cache, undo support\n"
 "\n"
-"On a 128 kB machine the ProDOS /RAM disk is disconnected at startup,\n"
-"because the interpreter uses that auxilary memory.\n"
+"Bootable Disks\n"
+"--------------\n"
 "\n"
 ;
 
 /* One %s, the disk image name. */
 static const char readme_single[] =
-"Bootable disk\n"
-"-------------\n"
-"\n"
 "  %s\n"
 "       A 140 kB disk, volume /AA.STORY, holding AAM.SYSTEM and\n"
 "       STORY.  Boot it and the story starts.\n"
@@ -736,9 +748,6 @@ static const char readme_single[] =
 
 /* Two %s, the boot and story disk image names. */
 static const char readme_split[] =
-"Bootable disks\n"
-"--------------\n"
-"\n"
 "This story does not fit on one 140 kB disk alongside the interpreter,\n"
 "so it comes as a two-disk set:\n"
 "\n"
@@ -750,10 +759,26 @@ static const char readme_split[] =
 "\n"
 ;
 
-static const char readme_toobig[] =
-"Bootable disk\n"
-"-------------\n"
+/* Three %s, the single, boot and story disk image names. */
+static const char readme_both[] =
+"This story fits on one 140 kB disk, but not with a savefile beside it,\n"
+"so it comes both ways:\n"
 "\n"
+"  %s\n"
+"       One disk, volume /AA.STORY, holding AAM.SYSTEM and STORY.\n"
+"       Boot it and the story starts.  It has no SAVEFILE, so saving\n"
+"       is unavailable.\n"
+"\n"
+"  %s\n"
+"  %s\n"
+"       The same story as a two-disk set that can save.  Boot the\n"
+"       first (volume /AA.BOOT, holding AAM.SYSTEM and SAVEFILE) and\n"
+"       keep the second (volume /AA.STORY, holding STORY) in the\n"
+"       other drive.\n"
+"\n"
+;
+
+static const char readme_toobig[] =
 "This story is too large for a 140 kB disk even with nothing else on\n"
 "it, so it needs an 800 kB drive or a hard disk.\n"
 "\n"
@@ -772,19 +797,13 @@ static const char readme_800k[] =
 ;
 
 static const char readme_no800k[] =
-"No 800 kB disk was built, because that needs a real ProDOS to boot\n"
-"from and no ProDOS release image was found.  To get one:\n"
+"No 800 kB disk was built, because that needs a real ProDOS to boot from\n"
+"and no ProDOS release image was found.  To get one:\n"
 "\n"
 "* Get the disk image '" PRODOS_FILENAME "' from " PRODOS_URL "\n"
 "* Put it next to the story file and run aambundle again.\n"
 "\n"
-"Or build the disk by hand, with AppleCommander from\n"
-"https://applecommander.github.io/ .  AAM.SYSTEM must be the only\n"
-"*.SYSTEM file on the volume, since ProDOS runs the first one it finds:\n"
-"\n"
-"  acx create -d disk.po -n AA.STORY -f " PRODOS_FILENAME " -s 800k --prodos\n"
-"  ac -p disk.po AAM.SYSTEM SYS 0x2000 <AAM.SYSTEM\n"
-"  ac -p disk.po STORY BIN 0x0000 <STORY\n"
+"Or build the disk by hand, as below.\n"
 "\n"
 ;
 
@@ -798,13 +817,62 @@ static const char readme_boot0[] =
 "\n"
 ;
 
+static const char readme_save[] =
+"Saving\n"
+"------\n"
+"\n"
+"Saved games are written into SAVEFILE, an empty 4 kB file that sits on\n"
+"the boot volume next to AAM.SYSTEM.  The interpreter overwrites it in\n"
+"place -- it cannot create one or make it bigger -- so do not delete it,\n"
+"and leave that disk write enabled if you want to save.  On a two-disk\n"
+"set it is the boot disk that has to be writable, not the story disk.\n"
+"\n"
+;
+
+static const char readme_build[] =
+"Building Your Own ProDOS Volume\n"
+"-------------------------------\n"
+"\n"
+"The other files in this directory are the ones that go on a ProDOS\n"
+"disk, for putting the story on a hard disk or a volume of your own:\n"
+"\n"
+"  AAM.SYSTEM   the interpreter.  ProDOS file type SYS ($ff),\n"
+"               auxiliary type (load address) $2000.  ProDOS runs the\n"
+"               first *.SYSTEM file in the volume directory at boot,\n"
+"               so this should be the only one on the disk.\n"
+"\n"
+"  STORY        the story file.  ProDOS file type BIN ($06) is a\n"
+"               reasonable choice.  The name must be STORY, in the\n"
+"               volume directory, because that is the pathname the\n"
+"               interpreter opens.\n"
+"\n"
+"  SAVEFILE     an empty 4 kB file, ProDOS file type BIN ($06), that\n"
+"               saved games are written into.  Optional, but without\n"
+"               it the story cannot be saved.  It goes on the boot\n"
+"               volume, next to AAM.SYSTEM.\n"
+"\n"
+"IMPORTANT:\n"
+"The disk volume containing the story file must be named AA.STORY,\n"
+"and may be a different volume than the boot disk.\n"
+"\n"
+"With AppleCommander (https://applecommander.github.io/) and a ProDOS\n"
+"release image called '" PRODOS_FILENAME "':\n"
+"\n"
+"  acx create -d disk.po -n AA.STORY -f " PRODOS_FILENAME " -s 800k --prodos\n"
+"  ac -p disk.po AAM.SYSTEM SYS 0x2000 <AAM.SYSTEM\n"
+"  ac -p disk.po STORY BIN 0x0000 <STORY\n"
+"  ac -p disk.po SAVEFILE BIN 0x0000 <SAVEFILE\n"
+"\n"
+;
+
 static void write_readme(char *dirname, int mode, const char *single, const char *bootdisk, const char *storydisk, const char *bigdisk) {
 	char *text;
 	size_t size;
 
 	size = sizeof(readme_head) + sizeof(readme_single) + sizeof(readme_split)
-		+ sizeof(readme_toobig) + sizeof(readme_800k)
-		+ sizeof(readme_no800k) + sizeof(readme_boot0);
+		+ sizeof(readme_both) + sizeof(readme_toobig) + sizeof(readme_800k)
+		+ sizeof(readme_no800k) + sizeof(readme_boot0)
+		+ sizeof(readme_save) + sizeof(readme_build);
 	if(single) size += strlen(single);
 	if(bootdisk) size += strlen(bootdisk) + strlen(storydisk);
 	if(bigdisk) size += strlen(bigdisk);
@@ -816,6 +884,9 @@ static void write_readme(char *dirname, int mode, const char *single, const char
 
 	strcpy(text, readme_head);
 	switch(mode) {
+	case DISKS_BOTH:
+		sprintf(text + strlen(text), readme_both, single, bootdisk, storydisk);
+		break;
 	case DISKS_SPLIT:
 		sprintf(text + strlen(text), readme_split, bootdisk, storydisk);
 		break;
@@ -829,8 +900,10 @@ static void write_readme(char *dirname, int mode, const char *single, const char
 	if(bigdisk) {
 		sprintf(text + strlen(text), readme_800k, bigdisk);
 	}
-	if(mode != DISKS_BIGONLY) strcat(text, readme_boot0);
 	if(!bigdisk) strcat(text, readme_no800k);
+	if(mode != DISKS_BIGONLY) strcat(text, readme_boot0);
+	strcat(text, readme_save);
+	strcat(text, readme_build);
 
 	writefile(dirname, "readme.txt", (const uint8_t *) text, strlen(text));
 	free(text);
@@ -852,7 +925,7 @@ static char *disk_name(const char *suffix) {
  * *bigdisk and returns 0 on success; returns -1, having said why, when there
  * is no ProDOS to build it from. */
 static int build_800k(char *dirname, const struct diskfile *aam, const struct diskfile *storyfile, char **bigdisk) {
-	struct diskfile files[3];
+	struct diskfile files[4];
 	uint8_t *img, *kernel;
 	char *path = 0;
 	uint32_t kernelsize;
@@ -890,9 +963,14 @@ static int build_800k(char *dirname, const struct diskfile *aam, const struct di
 	files[0].aux = entry[0x1f] | (entry[0x20] << 8);
 	files[1] = *aam;
 	files[2] = *storyfile;
+	files[3] = savefile;
 
+	/* The 800k disk boots ProDOS, but AAM.SYSTEM still reaches the disk
+	 * through ProRWTS2, so it needs the same pre-made savefile. */
 	*bigdisk = disk_name("-800k");
 	if(build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
+		img, 2 * BLOCK_SIZE, 0, files, 4)
+	&& build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
 		img, 2 * BLOCK_SIZE, 0, files, 3)) {
 		fprintf(stderr, "%s: story too large for an 800k disk\n", *bigdisk);
 		exit(1);
@@ -906,7 +984,8 @@ static int build_800k(char *dirname, const struct diskfile *aam, const struct di
 
 /* Builds the bootable images.  Returns which set of 140k disks we made. */
 static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char **single, char **bootdisk, char **storydisk, char **bigdisk) {
-	struct diskfile files[2];
+	struct diskfile files[3], bootfiles[2];
+	int single_nosave;
 
 	files[0].name = "AAM.SYSTEM";
 	files[0].data = table_a2terp;
@@ -920,24 +999,33 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 	files[1].type = TYPE_BIN;
 	files[1].aux = 0;
 
+	files[2] = savefile;
+
 	*single = disk_name("");
 	if(!build_disk(dirname, *single, "AA.STORY", BLOCKS_140K,
 		table_a20boot, sizeof(table_a20boot), BOOT0_FIRST_DATA,
-		files, 2)) {
+		files, 3)) {
 		return DISKS_SINGLE;
 	}
 
-	/* Too big for one floppy: a two-disk set, plus an 800k disk for
-	 * anyone with a 3.5" drive, if we can build one.
-	 *
-	 * The story disk goes first because it is the one that can fail, and
+	/* No room for a savefile.  The story still fits on one disk without
+	 * one, and a single disk is worth having even though it cannot save,
+	 * so keep it and build the two-disk set as well -- on that set the
+	 * interpreter has a disk to itself and the savefile fits. */
+	single_nosave = !build_disk(dirname, *single, "AA.STORY", BLOCKS_140K,
+		table_a20boot, sizeof(table_a20boot), BOOT0_FIRST_DATA,
+		files, 2);
+	if(!single_nosave) {
+		free(*single);
+		*single = 0;
+	}
+
+	/* The story disk goes first because it is the one that can fail, and
 	 * failing before anything is written keeps us from leaving half a set
 	 * behind.  It carries no boot code -- under ProDOS it would get the
 	 * boot blocks so that booting it by mistake gives ProDOS's own "unable
 	 * to load" message, but 0boot's would try to load an interpreter that
 	 * is not there, so it gets none, and the block back. */
-	free(*single);
-	*single = 0;
 	*storydisk = disk_name("-story");
 
 	if(build_disk(dirname, *storydisk, "AA.STORY", BLOCKS_140K,
@@ -950,16 +1038,21 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 		return DISKS_BIGONLY;
 	}
 
+	/* The boot disk has room to spare, and it is the one that stays in
+	 * drive 1, so the savefile goes there rather than on the story disk. */
+	bootfiles[0] = files[0];
+	bootfiles[1] = savefile;
+
 	*bootdisk = disk_name("-boot");
 	if(build_disk(dirname, *bootdisk, "AA.BOOT", BLOCKS_140K,
 		table_a20boot, sizeof(table_a20boot), BOOT0_FIRST_DATA,
-		files, 1)) {
+		bootfiles, 2)) {
 		fprintf(stderr, "The interpreter does not fit on a 140k disk!\n");
 		exit(1);
 	}
 
 	build_800k(dirname, &files[0], &files[1], bigdisk);
-	return DISKS_SPLIT;
+	return single_nosave? DISKS_BOTH : DISKS_SPLIT;
 }
 
 void bundle_apple2(char *dirname) {
@@ -977,6 +1070,7 @@ void bundle_apple2(char *dirname) {
 	/* The interpreter reads STORY a page at a time, so round the file up
 	 * to a whole number of 256-byte pages. */
 	writefile_padded(dirname, "STORY", story, storysize, 256);
+	writefile(dirname, "SAVEFILE", blank_savefile, SAVEFILE_BYTES);
 
 	paddedsize = (storysize + 0xff) & ~0xffu;
 	padded = calloc(paddedsize? paddedsize : 1, 1);
