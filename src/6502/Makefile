@@ -30,6 +30,9 @@ decruncher.bin:		decruncher.s
 c64_crunched.bin:	c64_frontend.bin decruncher.bin cruncher
 			./cruncher $< decruncher.bin >$@
 
+a2_0boot.bin:		0boot.acme
+			acme -o $@ $<
+
 a2_prorwts2.bin:	a2_prorwts2.acme a2_frontend.bin
 			acme -DPRORWTS_ORG=$$(($$(wc -c < a2_frontend.bin) + 8192)) -l a2_prorwts2.sym -r a2_prorwts2.rpt $<
 
