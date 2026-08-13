@@ -100,6 +100,10 @@ To run the example story using the Vice Commodore 64 emulator, available at
 To run on a real Commodore 64, insert the disk and type: LOAD"*",8
 Then type: RUN
 
+To run the example story using an online Apple II emulator, go to
+<https://apple2ts.com/> then drag the disk image named "<story>-800k.po"
+to the page.
+
 To build the Å-machine tools under Linux (requires a C compiler and make):
 
 	cd src
