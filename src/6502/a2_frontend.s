@@ -88,6 +88,7 @@
 ;   https://github.com/peterferrie/0boot
 ;
 ; TODO
+; - victim cache (move stale pages to aux)
 ; - use the packer instead of boot mover?
 ; - save/restore filenames or multiple slots?
 
@@ -2785,6 +2786,10 @@ loop
 	.)
 #endif
 
+; =====================================
+; Aa-machine Interpreter Engine
+; =====================================
+
 #include "engine.s"
 
 ; =====================================
@@ -3133,14 +3138,14 @@ last
 
 banner
 	.(
-	ldx	#<txt_banner
-	ldy	#>txt_banner
-	jsr	putline
 	bit	auxram
 	bmi	yesauxram
 	lda	#0
 	sta	txt_128k
 yesauxram
+	ldx	#<txt_banner
+	ldy	#>txt_banner
+	jsr	putline
 	jsr	io_mline
 	jmp	io_mline
 	.)
@@ -3245,19 +3250,11 @@ txt_banner
 	.asc	"Aa-machine "
 	.asc	VERSION
 #if PRODOS
-	.asc	" (ProDOS"
+	.asc	" ProDOS"
 #elseif PRORWTS
-	.asc	" (ProRWTS2"
-#else
-	.asc	"(
+	.asc	" ProRWTS2"
 #endif
-#if UNDO
-	.asc	"+undo"
-#endif
-#if SAVERESTORE
-	.asc	"+save"
-#endif
-	.asc	")"
+; previous strings continue w/o null terminator
 txt_128k
 	.asc	" 128K",0
 
@@ -3275,12 +3272,11 @@ SAFEPG = (* + $ff) >> 8		; after init routines
 
 SAVEADDR = initsegment		; over init routines
 
-; this library is at the end of the file
+; the ProRWTS2 library is at the end of the file
 ; but it does not have to be moved, it will
 ; relocate itself
 
 #if PRORWTS
 prorwts2_init = * + $2000 - $800 + boothdrlen + himem_end - himem_start
-;	.bin	0,0,"a2_prorwts2.bin"
 #endif
 
