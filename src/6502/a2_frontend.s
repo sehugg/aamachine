@@ -88,9 +88,8 @@
 ;   https://github.com/peterferrie/0boot
 ;
 ; TODO
-; - ProRWTS two-disk mode
-; - use the packer instead of boot mover
-; - save/restore filenames or slots
+; - use the packer instead of boot mover?
+; - save/restore filenames or multiple slots?
 
 DEFWIDTH	= 80
 
@@ -361,6 +360,8 @@ rwregsbuf	= $02a0	; PRORWTS zero-page save,
 sv_cmd		= $02cd	; 0 seek, 1 read, 2 write
 sv_size		= $02ce	; word, bytes to transfer
 sv_addr		= $02d0	; word, main memory buffer
+sv_drive	= $02d2	; drive to open on, 0 boot
+cur_drive	= $02d3	; drive ProRWTS2 is on now
 
 rwregs_first	= $3b
 rwregs_last	= $67
@@ -1612,6 +1613,10 @@ savexfer
 	; Moves the savefile to or from SAVEADDR
 	; and puts STORY back, because ProRWTS2
 	; has room for one open file at a time.
+	;
+	; The bundler puts SAVEFILE on the boot
+	; disk, so it is on drive 0 even when the
+	; story came off the other drive.
 
 	.(
 	sta	sv_cmd
@@ -1619,6 +1624,8 @@ savexfer
 	sta	sv_addr+0
 	lda	#>SAVEADDR
 	sta	sv_addr+1
+	lda	#0
+	sta	sv_drive
 
 	ldx	#<sv_name
 	ldy	#>sv_name
@@ -2277,6 +2284,7 @@ rwts_openfile
 	; input sv_cmd = command
 	; input sv_size = byte count
 	; input sv_addr = main memory buffer
+	; input sv_drive = 0 boot drive, 1 the other
 	; output a = status, z set on success
 	;
 	; opendir falls through into the transfer,
@@ -2284,10 +2292,15 @@ rwts_openfile
 	; the data.  A command of zero moves
 	; nothing and just opens.
 	;
-	; Bit 7 of the command picks the drive in
-	; the slot during an open, and is clear
-	; here -- that is the hook for two-drive
-	; operation.
+	; Bit 7 of the command makes the open swap
+	; to the other drive in the slot rather
+	; than naming one, so reaching a particular
+	; drive means comparing with the one we are
+	; on.  ProRWTS2 remembers the choice, hence
+	; cur_drive alongside it.  A machine with
+	; one drive ignores the swap, and then both
+	; drives are the same drive and everything
+	; below still works.
 
 	.(
 	stx	f_temp
@@ -2300,6 +2313,12 @@ rwts_openfile
 	lda	f_temp2
 	sta	prorwts_namhi
 	lda	sv_cmd
+	ldx	sv_drive
+	cpx	cur_drive
+	beq	samedrive
+	stx	cur_drive
+	ora	#$80		; swap drives
+samedrive
 	sta	prorwts_reqcmd
 	lda	sv_size+0
 	sta	prorwts_sizelo
@@ -2352,10 +2371,21 @@ storyparms
 	sta	sv_size+1
 	sta	sv_addr+0
 	sta	sv_addr+1
+	lda	storydrive
+	sta	sv_drive
 	ldx	#<pathname_short
 	ldy	#>pathname_short
 	rts
 	.)
+
+storydrive
+	; Which drive STORY turned up on, 0 being
+	; the one we booted from.  On a two disk
+	; set the boot disk holds the interpreter
+	; and SAVEFILE and the story disk goes in
+	; the other drive, so this is 1 there.
+
+	.byt	0
 #endif
 
 #if PRODOS
@@ -3177,8 +3207,26 @@ nparm = *-parmsrc
 
 #if PRORWTS
 openstory
+	; A two disk set boots from the disk with
+	; the interpreter on it and the story is in
+	; the other drive, so a miss on the drive
+	; we booted from is not an error until the
+	; other one has been tried too.  Each pass
+	; looks at both, and storydrive keeps the
+	; answer for every later open.
+
 	.(
+	lda	#0
+	sta	cur_drive
 retry
+	jsr	storyparms
+	jsr	rwts_openfile
+	beq	opened
+
+	lda	storydrive
+	eor	#1
+	sta	storydrive
+
 	jsr	storyparms
 	jsr	rwts_openfile
 	beq	opened
