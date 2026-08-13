@@ -93,8 +93,8 @@ table_a2terp.h:		6502 6502/a2.system mkheader
 table_a20boot.h:	6502 6502/a2_0boot.bin mkheader
 			./mkheader table_a20boot <6502/a2_0boot.bin >$@
 
-table_a2license.h:	6502 6502/license.txt mkheader
-			./mkheader table_a2license <6502/license.txt >$@
+table_a2license.h:	6502 6502/license.txt 6502/a2_thirdparty_license.txt mkheader
+			cat 6502/license.txt 6502/a2_thirdparty_license.txt | ./mkheader table_a2license >$@
 
 table_c64license.h:	6502 6502/license.txt mkheader
 			./mkheader table_c64license <6502/license.txt >$@

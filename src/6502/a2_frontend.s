@@ -14,7 +14,7 @@
 ;  //e / //c / IIgs	80 columns if an
 ;			80-column card is
 ;			present, 40 otherwise
-;  128 kB machines	undo ring in aux RAM
+;  128 kB machines	cache/undo in aux RAM
 ;
 ; Screen output is delegated to the Monitor
 ; ROM, and to the //e 80-column firmware when
@@ -67,10 +67,12 @@
 ;  d000 - ffff	aux undo ring, both $d000
 ;		banks, 16 kB in all
 ;
-; ProRWTS2 Version (TODO):
+; ProRWTS2 Version
 ;
-; This version uses a small-footprint ProDOS library
-; which resides at $d000-$dfff.
+; This version uses a small-footprint ProDOS library which
+; resides at $d000-$dfff and replaces the existing ProDOS.
+; It has a separate entry point ($2003) for 0boot which
+; stubs out the few ProDOS calls ProRWTS2 needs to init.
 ;
 ; Main memory map (ProRWTS2)
 ; =====================================
@@ -79,39 +81,16 @@
 ;  d000 - f800  interpreter code (bank 1)
 ;  d000 - daff  PRORWTS (bank 2)
 ;
-; 0boot Version (TODO)
-;
-; Main memory map (0boot)
-; =====================================
-;  0800 - 09ff  0boot routines
-;  0a00 - 0bff  0boot tables
-;  0c00 - 1c00  interpreter code
-;  1c00 - bfff  heap / data
-;  d000 - ffff  interpreter code (bank 1)
-;
-; RWTS18 Version (TODO)
-;
-; Uses the RWTS18 disk format, giving you 161,280 bytes of disk.
-;
-; TODO The 80STORE soft switch remaps $0400-$07ff
-; and $2000-$3fff, so staying above both
-; whatever the video firmware has left the
-; switches set to?
-
-; DEFWIDTH only feeds initengine0; coldstart
-; overwrites screenw with the detected width
-; immediately afterwards.
-;
 ; See also:
 ;   https://prodos8.com/docs/techref/memory-use/
 ;   https://savagetaylor.com/til/TA33130.html
+;   https://github.com/peterferrie/prorwts2
+;   https://github.com/peterferrie/0boot
 ;
 ; TODO
-; - use the packer instead of boot mover
-; - fix ProRWTS save/restore
 ; - ProRWTS two-disk mode
-; - ProRWTS boot loader
-; - RWTS18 version?
+; - use the packer instead of boot mover
+; - save/restore filenames or slots
 
 DEFWIDTH	= 80
 
