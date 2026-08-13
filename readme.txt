@@ -119,7 +119,8 @@ To cross-compile the Windows version of the Å-machine tools under Linux
 
 Note that when aambundle is built, several files are copied from src/js and
 src/6502 into the resulting executable file. To rebuild the binary files in
-src/6502, run "make" in that directory. This requires the xa65 assembler.
+src/6502, run "make" in that directory. This requires the xa65 and acme
+assemblers.
 
 Project website:
 

@@ -60,13 +60,13 @@ against the bundled `AAM.SYSTEM`.
 
 ## Testing on the Apple II
 
-`~/bin/izheadless` (izapple2, source in `~/if/izapple2`) is the scriptable
-emulator. It reads commands on stdin — `text` dumps the text screen as ANSI,
+izapple2 (https://github.com/ivanizag/izapple2, headless frontend) is a scriptable emulator.
+It reads commands on stdin — `text` dumps the text screen as ANSI,
 `type`/`key`/`enter` feed the keyboard, `png`/`pngm` grab screenshots, `trace`
 tracers are selected with `-trace cpu|mos|mli|ss|ssreg`.
 
 ```sh
-printf 'run 20000\ntext\nquit\n' | ~/bin/izheadless -model 2enh disk.po
+printf 'run 20000\ntext\nquit\n' | izheadless -model 2enh disk.po
 ```
 
 Caveats learned the hard way:
@@ -78,16 +78,10 @@ Caveats learned the hard way:
   than piping a fixed command list.
 * `-trace cpu` produces millions of lines (≈4M for 12M cycles); redirect to the
   scratchpad and `grep -n` for addresses from `a2.labels`.
-* Default `-s3 fastchip` puts an accelerator card where the //e 80-column
-  firmware is expected; `-s3 empty` if slot 3 behaviour is suspect.
 * `-model 2plus` exercises the 40-column, upper-case-folding path.
 * `-speed full` runs the CPU flat out, which is much faster than waiting on
   NTSC timing when all you want to know is whether the thing booted.
-* **`text` is not a reliable signal.** It renders a screen full of inverse `@`
-  (character `$00`) for our images *and* for the emulator's own built-in
-  `dos33.dsk`, at both NTSC and full speed. Whatever it is reading, it is not
-  the live screen of a booted machine, so a screen of `@` proves nothing about
-  the image. Use `png`/`pngm` instead.
+* **`text` is not a reliable signal.** It sometimes renders a screen full of inverse `@`
 
 Disk images:
 
@@ -95,7 +89,7 @@ Disk images:
 python3 ../../mkprodos.py -o disk.po -s 140k a2.system,name=AAM.SYSTEM ../../example/cloak-rel2/STORY
 python3 ../../mkprodos.py -o disk.po -s 140k --0boot a2_0boot.bin \
         a2.system,name=AAM.SYSTEM ../../example/cloak-rel2/STORY   # no ProDOS needed
-~/bin/ac -l disk.po          # list a ProDOS image
+ac -l disk.po          # list a ProDOS image
 ```
 
 `mkprodos.py` (repo root) and `bundle_apple2.c` build the same thing; the C
@@ -348,13 +342,6 @@ Apple II items in flight:
   `izheadless`'s `text` command gives no usable signal — see above. Try `png`.
 * RWTS18 is still only sketched in the `a2_frontend.s` header comment as a
   future storage backend.
-
-The inverse-`@` screen noted on 2026-08-12 is **not** ours (2026-08-13): the
-emulator's own built-in `dos33.dsk` renders the same thing under `text`, at
-both NTSC and `-speed full`, so the command is not showing the live screen of
-a booted machine. It says nothing about whether an image boots. The ProRWTS
-image resetting back to the ProDOS splash is a separate observation and still
-unexplained.
 
 ## ProDOS zero page
 
