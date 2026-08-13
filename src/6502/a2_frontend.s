@@ -161,7 +161,10 @@ INVFLG		= $32
 KBD		= $c000
 KBDSTRB		= $c010
 CLR80STORE	= $c000
+SET80STORE	= $c001
 CLR80COL	= $c00c
+TXTPAGE1	= $c054
+TXTPAGE2	= $c055
 ALTCHRSET_OFF	= $c00e
 ALTCHRSET_ON	= $c00f
 
@@ -172,6 +175,17 @@ ALTCHRSET_ON	= $c00f
 
 CLRALTZP	= $c008
 SETALTZP	= $c009
+
+; RAMRD and RAMWRT pick main or auxiliary for
+; everything from $0200 to $bfff, independently
+; for reads and writes.  80STORE overrides them
+; for the text and hires pages, so it has to be
+; off for these to mean anything.
+
+CLRAUXRD	= $c002
+SETAUXRD	= $c003
+CLRAUXWR	= $c004
+SETAUXWR	= $c005
 
 LCRD2		= $c080		; read bank 2
 LCROM2		= $c082		; rom, bank 2 latched
@@ -341,6 +355,12 @@ FILEBUF		= $bb00
 
 #define A2_ENGINE_HIMEM		; some of engine gets put at $d000-$ffff
 
+; Only ProRWTS2's own init calls the MLI, and
+; only once.  When 0boot has booted us there is
+; no ProDOS at all and mlistub answers it.
+
+MLI		= $bf00
+
 #define ROMCALL(addr)		bit LCROM2:jsr addr:bit LCRD1
 #define ROMTAILCALL(addr)	ROMCALL(addr):rts
 
@@ -391,6 +411,20 @@ prorwts_opendir	 = prorwts_reloc + 3
 
 	* = $2000
 #if PRODOS || PRORWTS
+; ProDOS launches a SYS file by loading it at
+; $2000 and jumping there.  0boot enters three
+; bytes further along instead, which is how we
+; know there is no ProDOS underneath us and the
+; global page has to be faked before ProRWTS2
+; can initialise.  Two jumps, so the entry
+; points keep their addresses whatever else
+; moves around.
+
+	jmp	boot_entry
+#if PRORWTS
+	jmp	raw_entry
+#endif
+
 ; First, we move the mover to $300...
 boot_entry
 	.(
@@ -410,6 +444,27 @@ copy
 
 	jmp	$0300
 	.)
+
+#if PRORWTS
+; 0boot loads us the way ProDOS would and leaves
+; DEVNUM at $bf30, so all that is missing is the
+; MLI.  Plant the stub, then join the normal
+; path.
+
+raw_entry
+	.(
+	sei
+	cld
+	ldx	#mlistublen-1
+copy
+	lda	mlistubsrc,x
+	sta	MLI,x
+	dex
+	bpl	copy
+
+	jmp	boot_entry
+	.)
+#endif
 
 ; Then we run the mover at $300
 	moversrc = *
@@ -487,7 +542,44 @@ byteloop
 	.)
 
 moverlen = * - $300
-boothdrlen = moverlen + moversrc - $2000
+
+#if PRORWTS
+; The stub is assembled for $bf00 but lives in
+; the boot header, right behind the mover.
+
+	mlistubsrc = moversrc + moverlen
+	* = MLI
+mlistub
+	.(
+	; ProRWTS2 asks for the prefix once and
+	; takes its "no prefix" path when the
+	; answer is empty, so it never makes a
+	; second call -- an empty $0200 is the
+	; whole of the emulation.  The call number
+	; and the parameter pointer sit inline
+	; after the jsr, so the return address has
+	; to step over three bytes.
+
+	tsx
+	lda	$0101,x
+	clc
+	adc	#3
+	sta	$0101,x
+	lda	$0102,x
+	adc	#0
+	sta	$0102,x
+
+	lda	#0
+	sta	$0200		; prefix length
+	clc			; and no error
+	rts
+	.)
+mlistublen = * - MLI
+#else
+mlistublen = 0
+#endif
+
+boothdrlen = moverlen + mlistublen + moversrc - $2000
 bootcode = $2000 + boothdrlen
 
 #endif
@@ -2739,6 +2831,9 @@ auxclrlp
 	lda	#$27
 	sta	seed+1
 
+#if PRORWTS
+	ROMCALL(setmachid)
+#endif
 	jsr	detect
 	jsr	setupvideo
 #if PRODOS
@@ -2795,8 +2890,8 @@ notplus
 	sta	scrw
 no80
 	lda	MACHID
-	and	#$20
-	cmp	#$20
+	and	#$30
+	cmp	#$30		; %10 is 64K, not 128K
 	bne	done
 
 	lda	#$80
@@ -2804,6 +2899,145 @@ no80
 done
 	rts
 	.)
+
+#if PRORWTS
+; Work out for ourselves what ProDOS would have
+; put in MACHID, since under 0boot there is no
+; ProDOS to ask and by this point in a ProDOS
+; boot the global page is inside the heap.  Only
+; the three fields detect reads are filled in --
+; the clock bit and the bits 7,6 modifier stay
+; clear.
+
+setmachid
+	.(
+	lda	#$50		; ][+, 48K, no 80 columns
+	ldx	$fbb3
+	cpx	#$06		; ][e, ][c and IIgs say 6
+	bne	store
+
+	; The Pascal 1.1 firmware signature is the
+	; same thing ProDOS looks for, so a card in
+	; slot 3 that is not a display -- an
+	; accelerator, say -- is rejected here too.
+
+	lda	#$a0		; ][e, 64K, no 80 columns
+	ldx	$c305
+	cpx	#$38
+	bne	no80
+	ldx	$c307
+	cpx	#$18
+	bne	no80
+	ldx	$c30b
+	cpx	#$01
+	bne	no80
+	ldx	$c30c
+	cpx	#$80		; high nibble 8 is a display
+	bcc	no80
+	cpx	#$90
+	bcs	no80
+
+	ora	#$02		; 80 columns
+no80
+	sta	MACHID
+	jsr	auxtest
+	ora	MACHID		; aux RAM
+store
+	sta	MACHID
+	rts
+	.)
+
+; Returns $10 in a if there is auxiliary RAM,
+; which turns the 64K in bits 5,4 into 128K.
+; Only ever reached on a ][e or later, so the
+; switches are known to exist.  The main side of
+; the scratch byte is left as it was.
+;
+; RAMRD is no use for this.  It hands reads of
+; $0200 to $bfff to the auxiliary side, and that
+; includes the opcode fetches of the routine
+; doing the testing, so the read-back would come
+; out of auxiliary memory as code.  ALTZP moves
+; the zero page, the stack and $d000-$ffff
+; instead, and this routine sits in none of
+; those -- ROMCALL has left rom banked in over
+; $d000, and between SETALTZP and CLRALTZP there
+; is no zero page addressing, no stack traffic
+; and no jsr.
+;
+; A plain 80-column card carries 1 kB rather
+; than 64K, and decodes none of the address
+; lines above it, so it answers at every
+; auxiliary address -- the sparse mapping the
+; Apple II identification routine tests for.
+; Zero page $0b and $040b are the same cell on
+; such a card and different cells on a real
+; one, and 80STORE with PAGE2 reaches the
+; second of those without disturbing the fetch
+; either, so writing one and reading the other
+; tells the two cards apart.
+;
+; ProDOS starts by reading RDRAMRD and RDALTZP,
+; on the grounds that anything already banked
+; in must exist.  Nothing has touched either
+; switch this early, so that shortcut would
+; always fall through to here.
+
+auxscratch = f_temp		; moved by ALTZP
+auxmirror = $400 + auxscratch	; moved by PAGE2
+
+auxtest
+	.(
+	lda	auxscratch
+	pha
+	php
+	sei
+
+	; PAGE2 only picks the bank while 80STORE
+	; is on, and gives the display back when
+	; it goes off again, so the screen never
+	; sees any of this.
+
+	sta	SET80STORE
+	sta	TXTPAGE2
+	lda	auxmirror
+	pha
+
+	lda	#$5a
+	sta	auxmirror
+
+	lda	#$a5
+	sta	SETALTZP
+	sta	auxscratch	; auxiliary zero page
+	sta	CLRALTZP
+	eor	#$ff
+	sta	auxscratch	; main gets $5a
+
+	ldx	#0		; assume there is none
+
+	lda	auxmirror
+	cmp	#$5a
+	bne	restore		; 1 kB, mirrored
+
+	sta	SETALTZP
+	lda	auxscratch
+	sta	CLRALTZP
+	cmp	#$a5
+	bne	restore		; main answered instead
+
+	ldx	#$10
+restore
+	pla
+	sta	auxmirror
+	sta	TXTPAGE1
+	sta	CLR80STORE
+	plp
+	pla
+	sta	auxscratch
+	txa
+	rts
+	.)
+#endif
 
 setupvideo
 	.(

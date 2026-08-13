@@ -7,6 +7,7 @@
 
 #include "aambundle.h"
 
+#include "table_a20boot.h"
 #include "table_a2license.h"
 #include "table_a2terp.h"
 
@@ -15,11 +16,17 @@
  * The two pieces that go on the disk are emitted as plain files, for the
  * author to copy onto a ProDOS volume with whatever tool they prefer.
  *
- * A bootable volume also needs the ProDOS boot blocks and the PRODOS kernel,
- * which are Apple's and cannot be shipped here.  If a ProDOS release image
- * turns up in one of the usual places (see prodos_dirs below) we lift those
- * two pieces out of it and build bootable .po images as well; if not, we say
- * where to get one and carry on with the plain files.
+ * 140k disks boot with 0boot, Peter Ferrie's track loader, which reads
+ * AAM.SYSTEM straight off the raw tracks and enters it at $2003.  That needs
+ * nothing from Apple, so those images are always built.  The volume itself is
+ * still an ordinary ProDOS one -- only block 0 differs -- so ProRWTS2 can find
+ * STORY by name and the files can be copied off with any ProDOS tool.
+ *
+ * 0boot only understands 5.25" tracks, so an 800k image still needs the real
+ * thing: the ProDOS boot blocks and the PRODOS kernel, which are Apple's and
+ * cannot be shipped here.  If a ProDOS release image turns up in one of the
+ * usual places (see prodos_dirs below) we lift those two pieces out of it and
+ * build the 800k disk as well; if not, we say where to get one and carry on.
  *
  * AAM.SYSTEM is a ProDOS system program, type SYS ($ff), load address
  * $2000.  ProDOS runs the first *.SYSTEM file in the volume directory at
@@ -61,6 +68,17 @@ static char storyname[48];
 
 #define BLOCKS_140K		280
 #define BLOCKS_800K		1600
+#define BLOCKS_PER_TRACK	8
+
+/* 0boot's two stages go where ProDOS puts its own.  The boot PROM reads
+ * physical sector 0 into $800 and hands over with $3d already at 1, so 0boot's
+ * inc asks for physical sector 2 -- which a ProDOS-order image holds at
+ * logical sector 1, the high half of block 0.  So the blob drops in at offset
+ * 0 as it stands, its second stage landing at $100 by itself.
+ *
+ * 0boot then reads whole tracks from track 1, which means AAM.SYSTEM has to
+ * start on that boundary, at block 8.  Block 7 is the cost of the alignment. */
+#define BOOT0_FIRST_DATA	BLOCKS_PER_TRACK
 
 #define PRODOS_FILENAME		"ProDOS_2_4_3.po"
 #define PRODOS_URL		"https://prodos8.com/"
@@ -335,7 +353,8 @@ static uint8_t *find_prodos_image(size_t *sizeout, char **found) {
 static void explain_missing_prodos(void) {
 	int i;
 
-	printf("\nNo bootable disk image was built: no ProDOS image found.\n");
+	printf("\nNo 800k disk image was built: no ProDOS image found.\n");
+	printf("(The 140k disks boot with 0boot and do not need one.)\n");
 	printf("Download " PRODOS_FILENAME " from " PRODOS_URL " and put it in\n");
 	printf("one of these directories, then run aambundle again:\n");
 	for(i = 0; i < nprodos_dirs; i++) {
@@ -405,7 +424,10 @@ static uint8_t *dir_slot(struct volume *v, int slot) {
 		+ 4 + (slot % ENTRIES_PER_BLOCK) * ENTRY_LENGTH;
 }
 
-static void vol_init(struct volume *v, const char *name, int total_blocks, const uint8_t *boot) {
+/* first_data is the first block files may use; 0 means the usual one, just
+ * past the bitmap.  0boot volumes pass 8 to keep the interpreter on a track
+ * boundary. */
+static void vol_init(struct volume *v, const char *name, int total_blocks, const uint8_t *boot, size_t bootsize, int first_data) {
 	uint8_t *entry;
 	int i, num, prev, next;
 
@@ -419,12 +441,13 @@ static void vol_init(struct volume *v, const char *name, int total_blocks, const
 		exit(1);
 	}
 
-	if(boot) memcpy(v->image, boot, 2 * BLOCK_SIZE);
+	if(boot) memcpy(v->image, boot, bootsize);
 
 	/* one bit per block, most significant bit first; one bitmap block
 	 * covers 8 * 512 = 4096 blocks */
 	v->bitmap_blocks = (total_blocks + 4095) / 4096;
 	v->first_data = BITMAP_BLOCK + v->bitmap_blocks;
+	if(first_data > v->first_data) v->first_data = first_data;
 	memset(v->isfree, 1, total_blocks);
 	for(i = 0; i < v->first_data; i++) v->isfree[i] = 0;
 
@@ -481,16 +504,18 @@ static void vol_put(struct volume *v, int num, const uint8_t *data, uint32_t siz
 
 /* Stores up to 256 blocks under one index block.  Returns -1 if the volume
  * fills up, otherwise the index block number, with the number of blocks
- * consumed (index block included) in *used. */
+ * consumed (index block included) in *used.
+ *
+ * The data goes down first and the index block after it, so that a file's
+ * payload starts at the first free block on the volume.  ProDOS does not care
+ * where the index block sits, and 0boot needs AAM.SYSTEM to begin exactly on
+ * the track boundary. */
 static int vol_write_sapling(struct volume *v, const uint8_t *data, uint32_t size, int *used) {
 	uint32_t pos = 0, chunk;
 	int index, num, i = 0;
-	uint8_t *pointers;
+	uint8_t pointers[BLOCK_SIZE];
 
-	index = vol_alloc(v);
-	if(index < 0) return -1;
-	pointers = v->image + (size_t) index * BLOCK_SIZE;
-
+	memset(pointers, 0, sizeof(pointers));
 	*used = 1;
 	while(pos < size) {
 		chunk = (size - pos > BLOCK_SIZE)? BLOCK_SIZE : size - pos;
@@ -503,13 +528,17 @@ static int vol_write_sapling(struct volume *v, const uint8_t *data, uint32_t siz
 		pos += chunk;
 		i++;
 	}
+
+	index = vol_alloc(v);
+	if(index < 0) return -1;
+	vol_put(v, index, pointers, sizeof(pointers));
 	return index;
 }
 
 /* Stores the payload as a seedling, sapling or tree, whichever fits. */
 static int vol_write_data(struct volume *v, const uint8_t *data, uint32_t size, uint8_t *storage, int *key, int *used) {
 	uint32_t nblocks, pos = 0, chunk;
-	uint8_t *pointers;
+	uint8_t pointers[BLOCK_SIZE];
 	int master, index, sub, i = 0;
 
 	nblocks = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -532,9 +561,8 @@ static int vol_write_data(struct volume *v, const uint8_t *data, uint32_t size, 
 		return 0;
 	}
 
-	master = vol_alloc(v);
-	if(master < 0) return -1;
-	pointers = v->image + (size_t) master * BLOCK_SIZE;
+	/* Same again for the master index block -- data first, pointers after. */
+	memset(pointers, 0, sizeof(pointers));
 	*used = 1;
 	while(pos < size) {
 		chunk = POINTERS_PER_INDEX * BLOCK_SIZE;
@@ -547,6 +575,10 @@ static int vol_write_data(struct volume *v, const uint8_t *data, uint32_t size, 
 		pos += chunk;
 		i++;
 	}
+
+	master = vol_alloc(v);
+	if(master < 0) return -1;
+	vol_put(v, master, pointers, sizeof(pointers));
 	*storage = ST_TREE;
 	*key = master;
 	return 0;
@@ -597,14 +629,14 @@ static void vol_write_bitmap(struct volume *v) {
 
 /* Builds a volume holding the given files and writes it out.  Returns 0, or
  * -1 if they do not all fit, in which case nothing is written. */
-static int build_disk(char *dirname, const char *leaf, const char *volname, int total_blocks, const uint8_t *boot, const struct diskfile *files, int nfiles) {
+static int build_disk(char *dirname, const char *leaf, const char *volname, int total_blocks, const uint8_t *boot, size_t bootsize, int first_data, const struct diskfile *files, int nfiles) {
 	struct volume vol;
 	char *filename;
 	size_t namelen;
 	FILE *f;
 	int i;
 
-	vol_init(&vol, volname, total_blocks, boot);
+	vol_init(&vol, volname, total_blocks, boot, bootsize, first_data);
 	for(i = 0; i < nfiles; i++) {
 		if(vol_add(&vol, &files[i])) {
 			vol_free(&vol);
@@ -612,6 +644,16 @@ static int build_disk(char *dirname, const char *leaf, const char *volname, int 
 		}
 	}
 	vol_write_bitmap(&vol);
+
+	/* 0boot reads whole tracks, so the file it loads has to be one
+	 * unbroken run from where it starts reading.  It always is, but the
+	 * disk is unbootable if it ever is not, so check rather than trust. */
+	if(first_data && memcmp(vol.image + (size_t) first_data * BLOCK_SIZE,
+		files[0].data, files[0].size)) {
+		fprintf(stderr, "%s: %s is not contiguous from block %d\n",
+			leaf, files[0].name, first_data);
+		exit(1);
+	}
 
 	namelen = strlen(dirname) + strlen(leaf) + 2;
 	filename = malloc(namelen);
@@ -643,9 +685,9 @@ static int build_disk(char *dirname, const char *leaf, const char *volname, int 
 /* ---------------------------------------------------------------- readme */
 
 enum {
-	DISKS_NONE,
 	DISKS_SINGLE,
-	DISKS_SPLIT
+	DISKS_SPLIT,
+	DISKS_BIGONLY
 };
 
 static const char readme_head[] =
@@ -681,65 +723,78 @@ static const char readme_head[] =
 "\n"
 ;
 
-static const char readme_manual[] =
-"Building a bootable disk\n"
-"------------------------\n"
-"\n"
-"We need to create a bootable ProDOS volume, and for that we first need\n"
-"a bootable ProDOS disk image to copy from.\n"
-"\n"
-"* Install AppleCommander from https://applecommander.github.io/\n"
-"* Get the disk image '" PRODOS_FILENAME "' from " PRODOS_URL "\n"
-"\n"
-"AAM.SYSTEM must be the only *.SYSTEM file on the volume, since ProDOS\n"
-"runs the first one it finds.\n"
-"\n"
-"Example with AppleCommander:\n"
-"\n"
-"  acx create -d disk.po -n AA.STORY -f " PRODOS_FILENAME " -s 800k --prodos\n"
-"  ac -p disk.po AAM.SYSTEM SYS 0x2000 <AAM.SYSTEM\n"
-"  ac -p disk.po STORY BIN 0x0000 <STORY\n"
-"\n"
-"Alternatively, put a copy of " PRODOS_FILENAME " next to the story file and\n"
-"run aambundle again: it will build the bootable disk images itself.\n"
-"\n"
-;
-
-/* The three %s are the disk image names; see write_readme. */
+/* One %s, the disk image name. */
 static const char readme_single[] =
 "Bootable disk\n"
 "-------------\n"
 "\n"
 "  %s\n"
-"       A 140 kB ProDOS disk, volume /AA.STORY, holding PRODOS,\n"
-"       AAM.SYSTEM and STORY.  Boot it and the story starts.\n"
-"\n"
-"The PRODOS kernel and the boot blocks were copied from the ProDOS\n"
-"release image found at bundling time; ProDOS itself is\n"
-"redistributed under the Apple Software License Agreement.\n"
+"       A 140 kB disk, volume /AA.STORY, holding AAM.SYSTEM and\n"
+"       STORY.  Boot it and the story starts.\n"
 "\n"
 ;
 
+/* Two %s, the boot and story disk image names. */
 static const char readme_split[] =
 "Bootable disks\n"
 "--------------\n"
 "\n"
 "This story does not fit on one 140 kB disk alongside the interpreter,\n"
-"so there are two ways to play it:\n"
+"so it comes as a two-disk set:\n"
 "\n"
 "  %s\n"
 "  %s\n"
-"       A two-disk set.  Boot the first (volume /AA.BOOT, holding\n"
-"       PRODOS and AAM.SYSTEM) and keep the second (volume /AA.STORY,\n"
-"       holding STORY) in the other drive.\n"
+"       Boot the first (volume /AA.BOOT, holding AAM.SYSTEM) and keep\n"
+"       the second (volume /AA.STORY, holding STORY) in the other\n"
+"       drive.\n"
 "\n"
+;
+
+static const char readme_toobig[] =
+"Bootable disk\n"
+"-------------\n"
+"\n"
+"This story is too large for a 140 kB disk even with nothing else on\n"
+"it, so it needs an 800 kB drive or a hard disk.\n"
+"\n"
+;
+
+/* One %s, the 800k disk image name. */
+static const char readme_800k[] =
 "  %s\n"
 "       The same thing on one 800 kB disk, volume /AA.STORY, for a\n"
-"       3.5\" drive or a hard disk.\n"
+"       3.5\" drive or a hard disk.  This one boots ProDOS in the\n"
+"       ordinary way, so it also holds PRODOS.  The kernel and the\n"
+"       boot blocks were copied from the ProDOS release image found\n"
+"       at bundling time; ProDOS itself is redistributed under the\n"
+"       Apple Software License Agreement.\n"
 "\n"
-"The PRODOS kernel and the boot blocks were copied from the ProDOS\n"
-"release image found at bundling time; ProDOS itself is\n"
-"redistributed under the Apple Software License Agreement.\n"
+;
+
+static const char readme_no800k[] =
+"No 800 kB disk was built, because that needs a real ProDOS to boot\n"
+"from and no ProDOS release image was found.  To get one:\n"
+"\n"
+"* Get the disk image '" PRODOS_FILENAME "' from " PRODOS_URL "\n"
+"* Put it next to the story file and run aambundle again.\n"
+"\n"
+"Or build the disk by hand, with AppleCommander from\n"
+"https://applecommander.github.io/ .  AAM.SYSTEM must be the only\n"
+"*.SYSTEM file on the volume, since ProDOS runs the first one it finds:\n"
+"\n"
+"  acx create -d disk.po -n AA.STORY -f " PRODOS_FILENAME " -s 800k --prodos\n"
+"  ac -p disk.po AAM.SYSTEM SYS 0x2000 <AAM.SYSTEM\n"
+"  ac -p disk.po STORY BIN 0x0000 <STORY\n"
+"\n"
+;
+
+static const char readme_boot0[] =
+"The 140 kB disks boot with 0boot, Peter Ferrie's track loader\n"
+"(https://github.com/peterferrie/0boot), which reads the interpreter\n"
+"off the raw tracks rather than going through ProDOS.  That saves the\n"
+"17 kB the ProDOS kernel would take up, and boots faster.  The volume\n"
+"is an ordinary ProDOS one otherwise, so the files can be copied off\n"
+"with any ProDOS tool.\n"
 "\n"
 ;
 
@@ -747,9 +802,12 @@ static void write_readme(char *dirname, int mode, const char *single, const char
 	char *text;
 	size_t size;
 
-	size = sizeof(readme_head) + sizeof(readme_manual) + sizeof(readme_split);
+	size = sizeof(readme_head) + sizeof(readme_single) + sizeof(readme_split)
+		+ sizeof(readme_toobig) + sizeof(readme_800k)
+		+ sizeof(readme_no800k) + sizeof(readme_boot0);
 	if(single) size += strlen(single);
-	if(bootdisk) size += strlen(bootdisk) + strlen(storydisk) + strlen(bigdisk);
+	if(bootdisk) size += strlen(bootdisk) + strlen(storydisk);
+	if(bigdisk) size += strlen(bigdisk);
 	text = malloc(size);
 	if(!text) {
 		fprintf(stderr, "Out of memory\n");
@@ -758,16 +816,21 @@ static void write_readme(char *dirname, int mode, const char *single, const char
 
 	strcpy(text, readme_head);
 	switch(mode) {
-	case DISKS_SINGLE:
-		sprintf(text + strlen(text), readme_single, single);
-		break;
 	case DISKS_SPLIT:
-		sprintf(text + strlen(text), readme_split, bootdisk, storydisk, bigdisk);
+		sprintf(text + strlen(text), readme_split, bootdisk, storydisk);
+		break;
+	case DISKS_BIGONLY:
+		strcat(text, readme_toobig);
 		break;
 	default:
-		strcat(text, readme_manual);
+		sprintf(text + strlen(text), readme_single, single);
 		break;
 	}
+	if(bigdisk) {
+		sprintf(text + strlen(text), readme_800k, bigdisk);
+	}
+	if(mode != DISKS_BIGONLY) strcat(text, readme_boot0);
+	if(!bigdisk) strcat(text, readme_no800k);
 
 	writefile(dirname, "readme.txt", (const uint8_t *) text, strlen(text));
 	free(text);
@@ -785,8 +848,10 @@ static char *disk_name(const char *suffix) {
 	return name;
 }
 
-/* Builds the bootable images.  Returns which set we managed to make. */
-static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char **single, char **bootdisk, char **storydisk, char **bigdisk) {
+/* Builds the 800k image, which is the one that still boots ProDOS.  Sets
+ * *bigdisk and returns 0 on success; returns -1, having said why, when there
+ * is no ProDOS to build it from. */
+static int build_800k(char *dirname, const struct diskfile *aam, const struct diskfile *storyfile, char **bigdisk) {
 	struct diskfile files[3];
 	uint8_t *img, *kernel;
 	char *path = 0;
@@ -797,22 +862,22 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 	img = find_prodos_image(&imgsize, &path);
 	if(!img) {
 		explain_missing_prodos();
-		return DISKS_NONE;
+		return -1;
 	}
 
 	entry = find_entry(img, imgsize, "PRODOS");
 	if(!entry) {
-		printf("\n%s holds no PRODOS file; no bootable disk built.\n", path);
+		printf("\n%s holds no PRODOS file; no 800k disk built.\n", path);
 		free(img);
 		free(path);
-		return DISKS_NONE;
+		return -1;
 	}
 	kernel = read_entry(img, imgsize, entry, &kernelsize);
 	if(!kernel) {
-		printf("\nCould not read PRODOS from %s; no bootable disk built.\n", path);
+		printf("\nCould not read PRODOS from %s; no 800k disk built.\n", path);
 		free(img);
 		free(path);
-		return DISKS_NONE;
+		return -1;
 	}
 	printf("\nProDOS taken from %s\n", path);
 
@@ -823,44 +888,12 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 	files[0].size = kernelsize;
 	files[0].type = entry[0x10];
 	files[0].aux = entry[0x1f] | (entry[0x20] << 8);
+	files[1] = *aam;
+	files[2] = *storyfile;
 
-	files[1].name = "AAM.SYSTEM";
-	files[1].data = table_a2terp;
-	files[1].size = sizeof(table_a2terp);
-	files[1].type = TYPE_SYS;
-	files[1].aux = 0x2000;
-
-	files[2].name = "STORY";
-	files[2].data = padded;
-	files[2].size = paddedsize;
-	files[2].type = TYPE_BIN;
-	files[2].aux = 0;
-
-	*single = disk_name("");
-	if(!build_disk(dirname, *single, "AA.STORY", BLOCKS_140K, img, files, 3)) {
-		free(kernel);
-		free(img);
-		free(path);
-		return DISKS_SINGLE;
-	}
-
-	/* Too big for one floppy: a two-disk set, plus an 800k disk for
-	 * anyone with a 3.5" drive. */
-	free(*single);
-	*single = 0;
-	*bootdisk = disk_name("-boot");
-	*storydisk = disk_name("-story");
 	*bigdisk = disk_name("-800k");
-
-	if(build_disk(dirname, *bootdisk, "AA.BOOT", BLOCKS_140K, img, files, 2)) {
-		fprintf(stderr, "The interpreter does not fit on a 140k disk!\n");
-		exit(1);
-	}
-	if(build_disk(dirname, *storydisk, "AA.STORY", BLOCKS_140K, img, files + 2, 1)) {
-		fprintf(stderr, "%s: story too large for a 140k disk\n", *storydisk);
-		exit(1);
-	}
-	if(build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K, img, files, 3)) {
+	if(build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
+		img, 2 * BLOCK_SIZE, 0, files, 3)) {
 		fprintf(stderr, "%s: story too large for an 800k disk\n", *bigdisk);
 		exit(1);
 	}
@@ -868,6 +901,64 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 	free(kernel);
 	free(img);
 	free(path);
+	return 0;
+}
+
+/* Builds the bootable images.  Returns which set of 140k disks we made. */
+static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char **single, char **bootdisk, char **storydisk, char **bigdisk) {
+	struct diskfile files[2];
+
+	files[0].name = "AAM.SYSTEM";
+	files[0].data = table_a2terp;
+	files[0].size = sizeof(table_a2terp);
+	files[0].type = TYPE_SYS;
+	files[0].aux = 0x2000;
+
+	files[1].name = "STORY";
+	files[1].data = padded;
+	files[1].size = paddedsize;
+	files[1].type = TYPE_BIN;
+	files[1].aux = 0;
+
+	*single = disk_name("");
+	if(!build_disk(dirname, *single, "AA.STORY", BLOCKS_140K,
+		table_a20boot, sizeof(table_a20boot), BOOT0_FIRST_DATA,
+		files, 2)) {
+		return DISKS_SINGLE;
+	}
+
+	/* Too big for one floppy: a two-disk set, plus an 800k disk for
+	 * anyone with a 3.5" drive, if we can build one.
+	 *
+	 * The story disk goes first because it is the one that can fail, and
+	 * failing before anything is written keeps us from leaving half a set
+	 * behind.  It carries no boot code -- under ProDOS it would get the
+	 * boot blocks so that booting it by mistake gives ProDOS's own "unable
+	 * to load" message, but 0boot's would try to load an interpreter that
+	 * is not there, so it gets none, and the block back. */
+	free(*single);
+	*single = 0;
+	*storydisk = disk_name("-story");
+
+	if(build_disk(dirname, *storydisk, "AA.STORY", BLOCKS_140K,
+		0, 0, 0, files + 1, 1)) {
+		/* Too big even for a floppy of its own, so 5.25" is out
+		 * altogether and the 800k disk is the only way to ship it. */
+		free(*storydisk);
+		*storydisk = 0;
+		build_800k(dirname, &files[0], &files[1], bigdisk);
+		return DISKS_BIGONLY;
+	}
+
+	*bootdisk = disk_name("-boot");
+	if(build_disk(dirname, *bootdisk, "AA.BOOT", BLOCKS_140K,
+		table_a20boot, sizeof(table_a20boot), BOOT0_FIRST_DATA,
+		files, 1)) {
+		fprintf(stderr, "The interpreter does not fit on a 140k disk!\n");
+		exit(1);
+	}
+
+	build_800k(dirname, &files[0], &files[1], bigdisk);
 	return DISKS_SPLIT;
 }
 
