@@ -40,7 +40,7 @@ ver_02 = 1
                 might_exist  = 1        ;set to 1 if file is not known to always exist already
                                         ;makes use of status to indicate success or failure
                 many_files   = 0        ;set to 1 to support more than 256 files in a directory
-                detect_wp    = 0        ;detect write-protected floppy during writes
+                detect_wp    = 1        ;detect write-protected floppy during writes
                 allow_aux    = 0        ;set to 1 to allow read/write directly to/from aux memory
                                         ;requires load_high to be set for arbitrary memory access
                                         ;else driver must be running from same memory target
