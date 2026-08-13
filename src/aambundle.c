@@ -15,6 +15,53 @@ uint8_t *story;
 uint32_t storysize;
 
 static char *dirname;
+static char *storyfile;
+
+static int append_name(char *storyname, int storynamesize, int snamelen, char ch) {
+	if(snamelen < storynamesize - 1) {
+		if((ch >= 'a' && ch <= 'z')
+		|| (ch >= 'A' && ch <= 'Z')
+		|| (ch >= '0' && ch <= '9')) {
+			storyname[snamelen++] = ch;
+		} else {
+			storyname[snamelen++] = '-';
+		}
+	}
+	return snamelen;
+}
+
+// Stories without a title in their metadata are named after
+// the base name of the input file, e.g. "foo/bar.aastory"
+// becomes "bar".
+
+static int name_from_filename(char *storyname, int storynamesize) {
+	char *base, *end, *p;
+	int snamelen = 0;
+
+	if(!storyfile) {
+		return 0;
+	}
+	base = storyfile;
+	for(p = storyfile; *p; p++) {
+		if(*p == '/' || *p == '\\') {
+			base = p + 1;
+		}
+	}
+	end = 0;
+	for(p = base; *p; p++) {
+		if(*p == '.') {
+			end = p;
+		}
+	}
+	if(!end || end == base) {
+		end = p;
+	}
+	for(p = base; p < end; p++) {
+		snamelen = append_name(storyname, storynamesize, snamelen, *p);
+	}
+	storyname[snamelen] = 0;
+	return snamelen;
+}
 
 void visit_chunks(char *storyname, int storynamesize, file_visitor_t file_visitor) {
 	uint32_t pos = 12, size;
@@ -39,15 +86,7 @@ void visit_chunks(char *storyname, int storynamesize, file_visitor_t file_visito
 				if(chunk[0] == AAMETA_TITLE) {
 					chunk++;
 					while((ch = *chunk++)) {
-						if(snamelen < storynamesize - 1) {
-							if((ch >= 'a' && ch <= 'z')
-							|| (ch >= 'A' && ch <= 'Z')
-							|| (ch >= '0' && ch <= '9')) {
-								storyname[snamelen++] = ch;
-							} else {
-								storyname[snamelen++] = '-';
-							}
-						}
+						snamelen = append_name(storyname, storynamesize, snamelen, ch);
 					}
 					storyname[snamelen] = 0;
 				} else {
@@ -60,6 +99,13 @@ void visit_chunks(char *storyname, int storynamesize, file_visitor_t file_visito
 			}
 		}
 		pos += (8 + size + 1) & ~1;
+	}
+
+	if(!snamelen) {
+		snamelen = name_from_filename(storyname, storynamesize);
+	}
+	if(!snamelen) {
+		snprintf(storyname, storynamesize, "story");
 	}
 }
 
@@ -176,6 +222,8 @@ int main(int argc, char **argv) {
 	if(optind >= argc) {
 		usage(prgname);
 	}
+
+	storyfile = argv[optind];
 
 	if(strcmp(target, "web")
 	&& strcmp(target, "web:story")
