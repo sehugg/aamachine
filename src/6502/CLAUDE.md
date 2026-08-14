@@ -23,6 +23,140 @@ repository as a whole; this file covers the assembler side.
 | `aambox_frontend.s` | synthetic test machine | driven by `aambox6502.c`, used by `make test` |
 | `a2_frontend.s` | Apple II | ProDOS **or** ProRWTS2 storage, selected at assembly time |
 
+## c64_frontend.s notes
+
+* **REU (RAM Expansion Unit) as page cache.** Boot probes for a REU by
+  writing a marker byte through its `$df01`-`$df0a` registers and reading it
+  back with the size register wrapped through each of 8 bit positions
+  (`gotreu`/`checkdone`, `c64_frontend.s:2629`-`2658`); zero page `reutop`
+  (`$10`) ends up holding the detected size class, 0 meaning none. No REU
+  disables undo outright ("No REU detected. Undo is disabled."). With a REU
+  of at least 512K (`reutop >= 3`) the *entire* story is copied into REU at
+  boot (`itxt_reufill`) and `io_readpage` is served straight from REU instead
+  of disk — the whole page-cache/fault mechanism in `engine.s` effectively
+  never faults to `io_getc`-speed disk I/O on a REU-equipped C64.
+* **Wrong-disk detection.** `io_readpage` on a cache miss checks whether the
+  disk currently in the drive is the story disk; if not, `iotxt_wrongdisk`
+  (`c64_frontend.s:2187`) prints "Insert storydisk and press RETURN" and
+  retries, rather than reading garbage. No dual-drive support (unlike the
+  Apple II ProRWTS2 path) — there is exactly one drive to retry against.
+* Progress-bar geometry: `PREXTRA=8`/`PRSHIFT=2` (bars are drawn from
+  quarter-block PETSCII glyphs, hence the `<<2` scale), vs. `PRSHIFT=0` on
+  the text-mode platforms (aambox, Apple II).
+* Capacity is tight: as of this writing `gosling` (157,392-byte story) plus
+  the crunched interpreter leaves only a few hundred bytes of slack on a
+  169,984-byte `.d64` — treat the C64 target as close to its ceiling when
+  adding engine or frontend code.
+
+## engine.s: zero page and the io_* interface
+
+`engine.s` is generic — no platform code, no undocumented opcodes, safe to run
+from ROM. It owns zero page `$40`-`$ff` outright (register names are defined
+at the top of the file, e.g. `specreg`/`inst`/`cont` at `$40`-`$4d`, `operlsb`/
+`opermsb`/`result`/`rpair` at `$80`-`$8f` for arithmetic, `dictch`/`dicttbl`/
+`dictpiv` etc. at `$90`-`$9e` for dictionary lookup, `stflag`/`screenw`/
+`undosz`/`stybase`... at `$a0`-`$ad` for the status line, `codeseg`/`envbase`/
+`heapsz`/`auxsz`/`ramsz` at `$c0`-`$cf`); a frontend must not touch that range
+except through the documented interface. `zporg` at `$d0` (24 bytes) is a
+small block of self-modifying dispatch code the engine writes into zero page
+at init time. Heap layout is relative to a frontend-supplied `RAMEND`:
+`HEAPEND = RAMEND-$300`, then `regs` (64 words), `inpbuf` (64 bytes),
+`divstk` (8 words), the undo/chunk tables (`chnklsb`/`chnkssb`/`chnkmsb`),
+`databuf`, `filesz`, and a physical-to-virtual page-cache map, all packed into
+that fixed 768-byte tail below `RAMEND`.
+
+A frontend must, before `#include "engine.s"`:
+
+* Define `RAMEND` (top of engine RAM), and after the include, `SAFEPG`
+  (`(*+$ff)>>8`, the first free page once the frontend's own `io_*` code and
+  init routines are assembled) and `SAVEADDR` (where a savefile is staged —
+  often `SAFEPG<<8` or, on Apple II, deliberately overlaid on `initsegment`
+  since init code is dead once the engine starts). `SAVEMAXBYTES` (`$1000` by
+  default) bounds how big a savefile/undo snapshot can be.
+* Define the capability/geometry constants `DEFWIDTH` (screen columns),
+  `PREXTRA`/`PRSHIFT` (progress-bar scaling: the bar's `y` total is
+  `(width << PRSHIFT) - PREXTRA`), `HAVE_QUIT`, `HAVE_STATUS`, `HAVE_STYLE`,
+  `UNDO`, `SAVERESTORE` — these `#if`-gate whole blocks of engine code, so a
+  platform without save/restore storage (or without spare RAM for undo) can
+  compile it out entirely rather than stub it.
+* Implement every `io_*` routine the engine calls (see table below), then
+  `#include "engine.s"`, then call `initengine0` through `initengine5` in
+  order followed by `jmp startengine` (see `aambox_frontend.s` for the
+  minimal example — `c64_frontend.s` and `a2_frontend.s` are the same shape).
+  Each `initengineN` does one phase of boot: `0` sets `screenw`/`stflag`,
+  `1` loads the first story page and computes RAM requirements, `2` skims the
+  file's IFF-style chunk table, `3` sets up `LANG`/`DICT`, `4` primes `LOOK`,
+  `5` prefetches some `CODE` pages; `startengine` saves the stack pointer to
+  `savedsp` (used to unwind on a runtime error) and jumps into the fetch loop.
+
+The `io_*` contract (canonical input/output comments live next to each label
+in `aambox_frontend.s`, the simplest reference frontend):
+
+| Routine | Contract |
+|---|---|
+| `io_mputc` | input a = char, to the main text window |
+| `io_mclear` | clear the main window |
+| `io_mline` / `io_mline_raw` | end the current line in the main window |
+| `io_mflush` | flush any buffered output |
+| `io_mstyle` | input a = style bits |
+| `io_mprogress` | input x/y = progress/total, `0<=x<=y`, `y=(width<<PRSHIFT)-PREXTRA` |
+| `io_sprepare` | input a = status-line height (`HAVE_STATUS` only) |
+| `io_slocate` | input x = column, y = row |
+| `io_sputc` | input a = char, to the status line |
+| `io_sprogress` | same contract as `io_mprogress`, for the status line |
+| `io_scommit` | status line is fully drawn |
+| `io_getc` | output a = char (blocking key read) |
+| `io_gets` | input ioparam = buffer (64 chars room); output y = length |
+| `io_get_utf8` | output a = char, decoding multi-byte UTF-8 input; preserves y |
+| `io_quit` | terminate (`HAVE_QUIT` only) |
+| `io_random` | output x/y = lsb/msb, range `0..$7fff` |
+| `io_restart` | reset engine state for a restart |
+| `io_save` | input x/y = size lsb/msb, data at `SAVEADDR`; output c = success |
+| `io_load` | verify the 12-byte `AASV` header; on success load to `SAVEADDR` and set c, else clear c |
+| `io_undosupp` | output c = undo supported at runtime (RAM-dependent on some platforms) |
+| `io_saveundo` | input x/y = byte size, ioparam = start of data; output c = success |
+| `io_loadundo` | input x/y = byte size, ioparam = dest; output a = 0 ok / 1 no more entries |
+| `io_readpage` | input x = physical RAM target page, ioparam = virtual address bits 23..8 (l-e); output a = physical RAM target page actually used (the page-cache hook) |
+
+Frontends differ mainly in *how much* of this they can do cheaply: the C64
+and Apple II both set `HAVE_STATUS=1`/`UNDO=1`/`SAVERESTORE=1`; `aambox6502`
+(the automated-test target) sets `HAVE_STATUS=0`/`HAVE_STYLE=0` since the test
+harness only diffs the main-window transcript. `HAVE_QUIT=1` only on aambox —
+neither the C64 nor a `BASIC.SYSTEM`-less Apple II boot has anywhere to quit
+*to*.
+
+### The page cache and `io_readpage`
+
+The page cache is a fixed-size ring of physical RAM pages living directly
+below the heap, bounded by `firstpg`/`endpg` ($7e/$7f) and walked round-robin
+by the cursor `evict` ($7d), which doubles as an "isn't set up yet" sentinel:
+it reads `0` until `initengine1` has built the virtual-page table (`vtptr`/
+`vtmsb`, $7a/$7c) and initializes it to `SAFEPG+1`. `fault` (the cache-miss
+handler, `engine.s` near the `phydata`/`virdata` block) evicts the page at
+`evict`, marks its old owner out-of-core in the virtual-page table, **installs
+the new owner into `phy2lsb`/`phy2msb` before tail-calling `io_readpage`**,
+and returns whatever `io_readpage` puts in `a` as the physical page actually
+used. That ordering means `io_readpage` has no way to see which virtual page
+it is replacing — by the time it runs, the old-owner tag is already gone — so
+a frontend that wants write-back-on-evict (e.g. a "victim cache" that stashes
+evicted pages in aux/expansion RAM instead of discarding them, noted as a
+`a2_frontend.s` TODO) needs to capture the old owner earlier in the fault path
+than `io_readpage` itself; the engine does not currently give it that hook.
+
+Because the cache sits *below* the heap, and the heap grows downward as
+`initengine1`-`4` allocate story structures, the cache window has to shrink
+to stay out of the heap's way — `shrinkcache` (`engine.s`, called from
+`allocwords` and from `initengine1`) clamps `endpg` down to `freeptr+1`
+whenever `freeptr` has crossed into it, evicting anything now outside the new
+window. Commit `d240bf6` ("6502 engine fix: page-cache window overlapped the
+heap during init") is exactly this bug: before `shrinkcache` existed, a large
+enough story (e.g. `dungeon`) could grow the heap into the cache's *hardcoded
+initial guess* for its window, and page faults during the rest of init would
+silently scribble story pages over just-loaded chunk data — it showed up as
+garbled dictionary words leaking into game text. Any future rework of
+init-phase memory layout that moves `freeptr` needs to keep calling
+`shrinkcache` afterwards, or this class of corruption reappears.
+
 ## Building
 
 ```sh
@@ -92,7 +226,7 @@ python3 ../../mkprodos.py -o disk.po -s 140k --0boot a2_0boot.bin \
 ac -l disk.po          # list a ProDOS image
 ```
 
-`mkprodos.py` (repo root) and `bundle_apple2.c` build the same thing; the C
+`mkprodos.py` and `bundle_apple2.c` build the same thing; the C
 version is what ships. Both need a ProDOS release image to lift `PRODOS` and
 the boot blocks from. `AAM.SYSTEM` must be the only `*.SYSTEM` file on the
 volume, and the story volume must be named `AA.STORY`. Files too big for one
@@ -279,9 +413,7 @@ rather than only on 0boot disks. It is reached through `ROMCALL` because
 `$fbb3` is under the language card.
 
 Note that MACHID bits 5,4 are `01`=48K, `10`=64K, `11`=128K — testing
-`and #$20` alone treats a 64K //e as having aux memory, which would put the
-page cache and undo ring in memory that is not there. It has to be
-`and #$30 / cmp #$30`.
+`and #$20` alone treats a 64K //e as having aux memory.
 
 #### Why auxtest cannot use RAMRD
 
@@ -322,26 +454,41 @@ Nothing has touched either switch this early, so it would always fall through.
 Tracked in `todo.txt` (which also holds raw traces and checksum tables). The
 Apple II items in flight:
 
-* **Undo under ProRWTS is disabled** (`UNDO = 0`) because it corrupts the game;
-  it works under ProDOS. Prime suspect is `undomove`'s tail, which restores the
-  card with `lda LCROM2` — correct for a ProDOS system program, wrong for the
-  ProRWTS build, where the engine's own code is in LC bank 1 and the read
-  select has to go back to `$c088`. Not yet confirmed on hardware or emulator.
-* **Save/restore under ProRWTS is unimplemented** (`SAVERESTORE = 0`). The MLI
-  path in `#if PRODOS && SAVERESTORE` cannot be reused: no CREATE, no SET_EOF,
-  no growing files. Needs a pre-created fixed-size `SAVEFILE` and 512-byte
-  aligned writes.
-* **Two-disk mode** wants a ProDOS-based probe that runs before
-  `prorwts2_init`, finds which volume `STORY` is reachable from, and leaves the
-  prefix and `DEVNUM` (or the `reqcmd` drive bit) pointing at it.
-* 80-column mode has known cursor/newline bugs; `io_mstyle` is stubbed out
-  because inverse mode misbehaves there.
-* **0boot images are built but not yet booted.** Structure is verified
-  (stage placement, contiguity, both files extract byte-identical, volume
-  lists clean) but no run on hardware or in an emulator has succeeded, because
-  `izheadless`'s `text` command gives no usable signal — see above. Try `png`.
+* **Save/restore under ProRWTS is implemented via a pre-created `SAVEFILE`.**
+  ProRWTS2 can neither create a file nor grow one, so the bundler
+  (`bundle_apple2.c`) writes an empty (all-zero) 4 kB `SAVEFILE` — size must
+  match `SAVEMAXBYTES` in `engine.s` — next to `AAM.SYSTEM` on the boot
+  volume, and `io_save` overwrites it in place. An all-zero file has no
+  `AASV` header, which is how the interpreter tells "never saved" from a real
+  savefile. `detect_wp` is now on in `a2_prorwts2.acme`'s option block, so a
+  write-protected disk is caught instead of silently failing.
+  When a story is too big for one 140k disk *with* a savefile alongside it but
+  still fits *without* one, the bundler emits both: a single savefile-less
+  disk (`DISKS_BOTH` in `bundle_apple2.c`) and a two-disk set that can save.
+* **Two-disk ("dual drive") mode is implemented** (`c6f3d04`). `a2_frontend.s`
+  tracks `sv_drive` (which drive a transfer should target, 0 = boot drive),
+  `cur_drive` (which drive ProRWTS2 is currently open on) and `storydrive`
+  (which drive `STORY` was actually found on, discovered once at
+  `openstory` by retrying the open on the other drive and remembered for
+  every later open). `rwts_openfile` sets bit 7 of `prorwts_reqcmd` — which
+  ProRWTS2 reads as "swap to the other drive in the slot" rather than "select
+  drive N" — only when `sv_drive` differs from `cur_drive`, so a single-drive
+  machine (where both are always drive 0) never triggers a swap.
+  `SAVEFILE` always lives on drive 0 (the boot disk) even when the story came
+  off drive 1, because `savexfer` hardcodes `sv_drive = 0`.
+* 80-column mode has possible cursor/newline bugs; `io_mstyle` is stubbed out
+  because inverse mode misbehaves there (and it looks weird)
+* **140k images ship in `.dsk` sector order, not `.po`.** `bundle_apple2.c`'s
+  `write_image` reorders each track through the `dos_order` table (which is
+  its own inverse) when writing a 140k disk, because most emulators and
+  disk-writing tools expect DOS 3.3 sector order from a 5.25" image; 800k
+  images have no such split and stay `.po`.
 * RWTS18 is still only sketched in the `a2_frontend.s` header comment as a
   future storage backend.
+* **Victim cache** (moving evicted page-cache pages to aux instead of
+  discarding them) is noted as a TODO in `a2_frontend.s`'s header but not
+  started. `engine.s` needed a modification to set phy2[lm]sb after calling
+  io_readpage, not before.
 
 ## ProDOS zero page
 
