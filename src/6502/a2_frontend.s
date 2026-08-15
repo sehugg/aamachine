@@ -1,5 +1,7 @@
+; uncomment to print out debug info at runtime (dev only)
 ;#define DEBUG
 ;#define DEBUGIO
+;
 ; Apple II (ProDOS) Aa-machine frontend.
 ; Designed for the xa65 assembler.
 ;
@@ -34,11 +36,11 @@
 ; file called STORY on the main disk, but this limits
 ; you to about 100 KB size story files.
 ; On Apple IIGS you can use 800 KB disk images, and on
-; emulators you can use up to 32 MB.
+; emulators you can typically use up to 32 MB.
 ;
 ; ProDOS isn't very memory-efficient, as it takes up the
 ; entire 16 KB language card and 1 KB of RAM per open file.
-; Many games require too much heap space and will crash.
+; Many games require too much memory to run.
 ;
 ; Main memory map (ProDOS)
 ; =====================================
@@ -88,7 +90,7 @@
 ;   https://github.com/peterferrie/0boot
 ;
 ; TODO
-; - victim cache (move stale pages to aux)
+; - victim cache (move stale pages to aux)?
 ; - use the packer instead of boot mover?
 ; - save/restore filenames or multiple slots?
 
@@ -96,20 +98,21 @@ DEFWIDTH	= 80
 
 PREXTRA		= 2
 PRSHIFT		= 0
-HAVE_QUIT	= 0	; we don't have BASIC.SYSTEM
+HAVE_QUIT	= 1
 HAVE_STATUS	= 1
 HAVE_STYLE	= 0
-#if PRORWTS
 SAVERESTORE	= 1
 UNDO		= 1
-#define A2_EVICT_MAX 1
-#else
-SAVERESTORE	= 1
-UNDO		= 1
-#endif
 
 TRACE_INST	= 0
 TRACE_STORE	= 0
+
+// ProRWTS can't create files, so our SAVEFILE
+// must be created with maximum size in advance
+// and thus we must reserve that much memory
+#if PRORWTS
+#define A2_EVICT_MAX 1
+#endif
 
 ; ---- Monitor entry points ----
 
@@ -196,11 +199,6 @@ AUXCACHEPAGES	= (AUXCACHEEND-AUXCACHESTART)>>8
 ; ProDOS keep their vectors) and lifts the
 ; 128-slot ceiling that two-byte tags imposed
 ; on page 3.
-;
-; The quotient has to stay under 256 for the
-; tag to be unique, so this holds for stories
-; below AUXCACHEPAGES * 64 kB -- 8 MB at 128
-; slots, well past what the machine can run.
 
 AUXCACHETAG	= $300		; AUXCACHEPAGES bytes
 
@@ -219,9 +217,6 @@ AUXCACHETAG	= $300		; AUXCACHEPAGES bytes
 ;
 ;   logical $c000-$cfff = bank 1 $d000-$dfff
 ;   logical $d000-$ffff = bank 2 $d000-$ffff
-;
-; so the ring above never has to know that the
-; area is banked at all.
 
 AUXUNDOLO	= $c000		; logical
 AUXUNDOPAGES	= 256-(AUXUNDOLO>>8)
@@ -332,7 +327,8 @@ FILEBUF		= $bb00
 
 #if PRORWTS
 
-#define A2_ENGINE_HIMEM		; some of engine gets put at $d000-$ffff
+; for ProRWTS, some of engine gets put at $d000-$ffff
+#define A2_ENGINE_HIMEM		
 
 ; Only ProRWTS2's own init calls the MLI, and
 ; only once.  When 0boot has booted us there is
@@ -414,7 +410,7 @@ boot_entry
 #if PRORWTS
 	; we have to call prorwts2_init here first,
 	; before we copy over ProDOS in the language card
-	jsr	prorwts2_init	; TODO check status?
+	jsr	prorwts2_init
 #endif
 	ldx	#moverlen
 copy
@@ -1192,6 +1188,7 @@ firmware
 ;; "RESTART SYSTEM-$0B"
 io_quit
 	.(
+; ProRWTS2 can't quit, so we reboot
 #if PRODOS
 	jsr	set_normal
 	jsr	io_mline
@@ -1201,8 +1198,8 @@ io_quit
 	ldy	#>p_quit
 	jsr	mlicall
 #endif
-halt
-	jmp	halt
+	inc	$3f4		; modify pwrup checksum so we reboot
+	ROMTAILCALL($fa62)	; reset
 	.)
 
 io_restart
