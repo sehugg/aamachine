@@ -5,7 +5,7 @@
 ; Apple II (ProDOS) Aa-machine frontend.
 ; Designed for the xa65 assembler.
 ;
-; ProDOS Version:
+; ProDOS Version (-DPRODOS=1):
 ;
 ; The machine is identified at boot from the
 ; ProDOS global page, and the screen width,
@@ -69,7 +69,7 @@
 ;  d000 - ffff	aux undo ring, both $d000
 ;		banks, 16 kB in all
 ;
-; ProRWTS2 Version
+; ProRWTS2 Version (-DPRORWTS=1)
 ;
 ; This version uses a small-footprint ProDOS library which
 ; resides at $d000-$dfff and replaces the existing ProDOS.
@@ -90,6 +90,7 @@
 ;   https://github.com/peterferrie/0boot
 ;
 ; TODO
+; - run AAM.SYSTEM from already-booted ProDOS w/ story on drive 2
 ; - victim cache (move stale pages to aux)?
 ; - use the packer instead of boot mover?
 ; - save/restore filenames or multiple slots?

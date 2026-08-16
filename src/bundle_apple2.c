@@ -385,10 +385,11 @@ static uint8_t *find_prodos_image(size_t *sizeout, char **found) {
 static void explain_missing_prodos(void) {
 	int i;
 
-	printf("\nNo 800k disk image was built: no ProDOS image found.\n");
-	printf("(The 140k disks boot with 0boot and do not need one.)\n");
-	printf("Download " PRODOS_FILENAME " from " PRODOS_URL " and put it in\n");
-	printf("one of these directories, then run aambundle again:\n");
+	printf("\nNo ProDOS image found: the 800k disk will not be self-booting.\n");
+	printf("(The 140k disks boot with 0boot and do not need one; see the\n");
+	printf("readme for how to run the 800k disk without booting it.)\n");
+	printf("To make it bootable, download " PRODOS_FILENAME " from " PRODOS_URL "\n");
+	printf("and put it in one of these directories, then run aambundle again:\n");
 	for(i = 0; i < nprodos_dirs; i++) {
 		printf("    %s\n", prodos_dirs[i]);
 	}
@@ -764,7 +765,8 @@ static const char readme_head[] =
 "-------------------\n"
 "\n"
 "Requires 64 kB.  The 140 kB disks boot by themselves and need no\n"
-"ProDOS; the 800 kB disk boots ProDOS 8.\n"
+"ProDOS; the 800 kB disk boots ProDOS 8 too, when a ProDOS release\n"
+"image was available at bundling time (see below).\n"
 "\n"
 "The interpreter identifies the machine at boot and adapts to it:\n"
 "\n"
@@ -772,8 +774,8 @@ static const char readme_head[] =
 "  //e / //c / IIgs     80 columns when an 80-column card is present\n"
 "  128 kB machines      additional page cache, undo support\n"
 "\n"
-"Bootable Disks\n"
-"--------------\n"
+"Disk Images\n"
+"-----------\n"
 "\n"
 ;
 
@@ -835,14 +837,24 @@ static const char readme_800k[] =
 "\n"
 ;
 
-static const char readme_no800k[] =
-"No 800 kB disk was built, because that needs a real ProDOS to boot from\n"
-"and no ProDOS release image was found.  To get one:\n"
+/* One %s, the 800k disk image name. */
+static const char readme_800k_noboot[] =
+"  %s\n"
+"       The same thing on one 800 kB disk, volume /AA.STORY, for a\n"
+"       3.5\" drive or a hard disk.  No ProDOS release image was found\n"
+"       at bundling time, so this disk is NOT self-booting -- it just\n"
+"       holds AAM.SYSTEM and STORY (and SAVEFILE, if there was room),\n"
+"       with no PRODOS kernel or boot blocks.\n"
 "\n"
-"* Get the disk image '" PRODOS_FILENAME "' from " PRODOS_URL "\n"
-"* Put it next to the story file and run aambundle again.\n"
-"\n"
-"Or build the disk by hand, as below.\n"
+"       To run it, boot ProDOS from some other disk, put this one in a\n"
+"       3.5\" drive or partition, and from the BASIC.SYSTEM prompt type\n"
+"       -/AA.STORY/AAM.SYSTEM.  That disk must be drive 1 of its slot:\n"
+"       AAM.SYSTEM reaches the disk through ProRWTS2, which identifies\n"
+"       it from ProDOS's DEVNUM byte and only recognizes drive 1 there,\n"
+"       so drive 2 will not be found.  Alternatively, build the disk by\n"
+"       hand with AppleCommander and a ProDOS image (below), or get\n"
+"       '" PRODOS_FILENAME "' from " PRODOS_URL ", put it next to the\n"
+"       story file, and run aambundle again for a self-booting disk.\n"
 "\n"
 ;
 
@@ -904,13 +916,13 @@ static const char readme_build[] =
 "\n"
 ;
 
-static void write_readme(char *dirname, int mode, const char *single, const char *bootdisk, const char *storydisk, const char *bigdisk) {
+static void write_readme(char *dirname, int mode, const char *single, const char *bootdisk, const char *storydisk, const char *bigdisk, int bigdisk_boots) {
 	char *text;
 	size_t size;
 
 	size = sizeof(readme_head) + sizeof(readme_single) + sizeof(readme_split)
 		+ sizeof(readme_both) + sizeof(readme_toobig) + sizeof(readme_800k)
-		+ sizeof(readme_no800k) + sizeof(readme_boot0)
+		+ sizeof(readme_800k_noboot) + sizeof(readme_boot0)
 		+ sizeof(readme_save) + sizeof(readme_build);
 	if(single) size += strlen(single);
 	if(bootdisk) size += strlen(bootdisk) + strlen(storydisk);
@@ -937,9 +949,8 @@ static void write_readme(char *dirname, int mode, const char *single, const char
 		break;
 	}
 	if(bigdisk) {
-		sprintf(text + strlen(text), readme_800k, bigdisk);
+		sprintf(text + strlen(text), bigdisk_boots? readme_800k : readme_800k_noboot, bigdisk);
 	}
-	if(!bigdisk) strcat(text, readme_no800k);
 	if(mode != DISKS_BIGONLY) strcat(text, readme_boot0);
 	strcat(text, readme_save);
 	strcat(text, readme_build);
@@ -960,69 +971,91 @@ static char *disk_name(const char *suffix, const char *ext) {
 	return name;
 }
 
-/* Builds the 800k image, which is the one that still boots ProDOS.  Sets
- * *bigdisk and returns 0 on success; returns -1, having said why, when there
- * is no ProDOS to build it from. */
+/* Builds the 800k image.  When a ProDOS release image can be found, the
+ * disk boots by itself; otherwise it is built as an ordinary (unbootable)
+ * data volume holding just AAM.SYSTEM and STORY -- see readme_800k_noboot
+ * for the caveat about running it that way.  Sets *bigdisk and returns 1
+ * if the disk boots, 0 if it is data-only. The story not fitting on an
+ * 800k disk at all is a hard error, handled here rather than passed back. */
 static int build_800k(char *dirname, const struct diskfile *aam, const struct diskfile *storyfile, char **bigdisk) {
 	struct diskfile files[4];
-	uint8_t *img, *kernel;
+	uint8_t *img = 0, *kernel = 0;
 	char *path = 0;
-	uint32_t kernelsize;
+	uint32_t kernelsize = 0;
 	size_t imgsize;
-	const uint8_t *entry;
+	const uint8_t *entry = 0;
 
 	img = find_prodos_image(&imgsize, &path);
-	if(!img) {
+	if(img) {
+		entry = find_entry(img, imgsize, "PRODOS");
+		if(!entry) {
+			printf("\n%s holds no PRODOS file; building 800k disk without ProDOS.\n", path);
+			free(img);
+			img = 0;
+		}
+	}
+	if(img) {
+		kernel = read_entry(img, imgsize, entry, &kernelsize);
+		if(!kernel) {
+			printf("\nCould not read PRODOS from %s; building 800k disk without ProDOS.\n", path);
+			free(img);
+			img = 0;
+		}
+	}
+	if(img) {
+		printf("\nProDOS taken from %s\n", path);
+	} else {
 		explain_missing_prodos();
-		return -1;
 	}
+	free(path);
 
-	entry = find_entry(img, imgsize, "PRODOS");
-	if(!entry) {
-		printf("\n%s holds no PRODOS file; no 800k disk built.\n", path);
-		free(img);
-		free(path);
-		return -1;
-	}
-	kernel = read_entry(img, imgsize, entry, &kernelsize);
-	if(!kernel) {
-		printf("\nCould not read PRODOS from %s; no 800k disk built.\n", path);
-		free(img);
-		free(path);
-		return -1;
-	}
-	printf("\nProDOS taken from %s\n", path);
-
-	/* PRODOS goes in first so the boot block finds it, and AAM.SYSTEM
-	 * before STORY so it is the first *.SYSTEM in the directory. */
-	files[0].name = "PRODOS";
-	files[0].data = kernel;
-	files[0].size = kernelsize;
-	files[0].type = entry[0x10];
-	files[0].aux = entry[0x1f] | (entry[0x20] << 8);
-	files[1] = *aam;
-	files[2] = *storyfile;
-	files[3] = savefile;
-
-	/* The 800k disk boots ProDOS, but AAM.SYSTEM still reaches the disk
-	 * through ProRWTS2, so it needs the same pre-made savefile. */
 	*bigdisk = disk_name("-800k", ".po");
-	if(build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
-		img, 2 * BLOCK_SIZE, 0, files, 4)
-	&& build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
-		img, 2 * BLOCK_SIZE, 0, files, 3)) {
+
+	if(img) {
+		/* PRODOS goes in first so the boot block finds it, and
+		 * AAM.SYSTEM before STORY so it is the first *.SYSTEM in the
+		 * directory.  AAM.SYSTEM still reaches the disk through
+		 * ProRWTS2, so it needs the same pre-made savefile. */
+		files[0].name = "PRODOS";
+		files[0].data = kernel;
+		files[0].size = kernelsize;
+		files[0].type = entry[0x10];
+		files[0].aux = entry[0x1f] | (entry[0x20] << 8);
+		files[1] = *aam;
+		files[2] = *storyfile;
+		files[3] = savefile;
+
+		if(build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
+			img, 2 * BLOCK_SIZE, 0, files, 4)
+		&& build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
+			img, 2 * BLOCK_SIZE, 0, files, 3)) {
+			fprintf(stderr, "%s: story too large for an 800k disk\n", *bigdisk);
+			exit(1);
+		}
+
+		free(kernel);
+		free(img);
+		return 1;
+	}
+
+	/* No ProDOS to boot with -- an ordinary data volume.  No boot code,
+	 * same as the story-only disk in the 140k split case. */
+	files[0] = *aam;
+	files[1] = *storyfile;
+	files[2] = savefile;
+
+	if(build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K, 0, 0, 0, files, 3)
+	&& build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K, 0, 0, 0, files, 2)) {
 		fprintf(stderr, "%s: story too large for an 800k disk\n", *bigdisk);
 		exit(1);
 	}
 
-	free(kernel);
-	free(img);
-	free(path);
 	return 0;
 }
 
-/* Builds the bootable images.  Returns which set of 140k disks we made. */
-static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char **single, char **bootdisk, char **storydisk, char **bigdisk) {
+/* Builds the bootable images.  Returns which set of 140k disks we made;
+ * *bigdisk_boots is set to whether the 800k disk (always built) boots. */
+static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char **single, char **bootdisk, char **storydisk, char **bigdisk, int *bigdisk_boots) {
 	struct diskfile files[3], bootfiles[2];
 	int single_nosave;
 
@@ -1073,7 +1106,7 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 		 * altogether and the 800k disk is the only way to ship it. */
 		free(*storydisk);
 		*storydisk = 0;
-		build_800k(dirname, &files[0], &files[1], bigdisk);
+		*bigdisk_boots = build_800k(dirname, &files[0], &files[1], bigdisk);
 		return DISKS_BIGONLY;
 	}
 
@@ -1090,7 +1123,7 @@ static int build_disks(char *dirname, uint8_t *padded, uint32_t paddedsize, char
 		exit(1);
 	}
 
-	build_800k(dirname, &files[0], &files[1], bigdisk);
+	*bigdisk_boots = build_800k(dirname, &files[0], &files[1], bigdisk);
 	return single_nosave? DISKS_BOTH : DISKS_SPLIT;
 }
 
@@ -1098,7 +1131,7 @@ void bundle_apple2(char *dirname) {
 	char *single = 0, *bootdisk = 0, *storydisk = 0, *bigdisk = 0;
 	uint8_t *padded;
 	uint32_t paddedsize;
-	int mode;
+	int mode, bigdisk_boots = 0;
 
 	visit_chunks(storyname, sizeof(storyname), 0);
 	trim_chunks(1);
@@ -1119,9 +1152,9 @@ void bundle_apple2(char *dirname) {
 	}
 	memcpy(padded, story, storysize);
 
-	mode = build_disks(dirname, padded, paddedsize, &single, &bootdisk, &storydisk, &bigdisk);
+	mode = build_disks(dirname, padded, paddedsize, &single, &bootdisk, &storydisk, &bigdisk, &bigdisk_boots);
 
-	write_readme(dirname, mode, single, bootdisk, storydisk, bigdisk);
+	write_readme(dirname, mode, single, bootdisk, storydisk, bigdisk, bigdisk_boots);
 	writefile(dirname, "interpreter_license.txt",
 		table_a2license, sizeof(table_a2license));
 
