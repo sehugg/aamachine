@@ -40,7 +40,7 @@
  * fits, the single disk is built without one and a two-disk set is built
  * alongside it, so there is always a way to save.
  *
- * The disk volume containing the story file must be named "AA.STORY"
+ * The disk volume containing the story file should be named "AA.STORY"
  * but it need not be the same as the boot/interpreter volume.
  * This mainly applies when booting from "real" ProDOS, because ProRWTS
  * doesn't do a volume scan.
@@ -845,8 +845,9 @@ static const char readme_800k_noboot[] =
 "       with no PRODOS kernel or boot blocks.\n"
 "\n"
 "       To run it, boot ProDOS from some other disk, put this one in a\n"
-"       3.5\" drive or partition, and from the BASIC.SYSTEM prompt type:\n"
-"         -/AA.STORY/AAM.SYSTEM.\n"
+"       3.5\" drive or partition, and from the BASIC.SYSTEM prompt type:\n\n"
+"         PREFIX -/AA.STORY\n"
+"         -AAM.SYSTEM.\n\n"
 "       Note: When run this way, the SAVEFILE must be on the story disk.\n"
 "\n"
 "       Alternatively, build the disk by\n"
@@ -899,10 +900,6 @@ static const char readme_build[] =
 "               saved games are written into.  Optional, but without\n"
 "               it the story cannot be saved.  It goes on the boot\n"
 "               volume, next to AAM.SYSTEM.\n"
-"\n"
-"IMPORTANT:\n"
-"The disk volume containing the story file must be named AA.STORY,\n"
-"and may be a different volume than the boot disk.\n"
 "\n"
 "With AppleCommander (https://applecommander.github.io/) and a ProDOS\n"
 "release image called '" PRODOS_FILENAME "':\n"
