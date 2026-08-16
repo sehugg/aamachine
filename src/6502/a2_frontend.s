@@ -42,6 +42,10 @@
 ; entire 16 KB language card and 1 KB of RAM per open file.
 ; Many games require too much memory to run.
 ;
+; Note -- the volume containing the STORY file should be
+; called AA.STORY. The ProDOS version will scan for this
+; volume label if it fails to find STORY in the current prefix.
+;
 ; Main memory map (ProDOS)
 ; =====================================
 ;  0000 - 001f	frontend zero page
@@ -75,10 +79,6 @@
 ; resides at $d000-$dfff and replaces the existing ProDOS.
 ; It has a separate entry point ($2003) for 0boot which
 ; stubs out the few ProDOS calls ProRWTS2 needs to init.
-;
-; Note -- the volume containing the STORY file should be
-; called AA.STORY, especially if you are booting from a
-; real ProDOS.
 ;
 ; Main memory map (ProRWTS2)
 ; =====================================
@@ -405,11 +405,6 @@ prorwts_opendir	 = prorwts_reloc + 3
 boot_entry
 	.(
 #if PRORWTS
-	; first, set prefix to /AA.STORY
-	; this is a no-op unless we booted from a real ProDOS
-	jsr	MLI
-	.byt	$c6		; SET_PREFIX
-	.word	p_set_prefix
 	; we have to call prorwts2_init here first,
 	; before we copy over ProDOS in the language card
 	jsr	prorwts2_init
@@ -425,13 +420,6 @@ copy
 	.)
 
 #if PRORWTS
-p_set_prefix
-	.byt	1
-	.word	vol_prefix
-vol_prefix
-	.byte	8+1
-	.asc	"/AA.STORY"
-
 ; 0boot loads us the way ProDOS would and leaves
 ; DEVNUM at $bf30, so all that is missing is the
 ; MLI.  Plant the stub, then join the normal
