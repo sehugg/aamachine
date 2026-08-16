@@ -17,8 +17,7 @@
  * author to copy onto a ProDOS volume with whatever tool they prefer.
  *
  * 140k disks boot with 0boot, Peter Ferrie's track loader, which reads
- * AAM.SYSTEM straight off the raw tracks and enters it at $2003.  That needs
- * nothing from Apple, so those images are always built.  The volume itself is
+ * AAM.SYSTEM straight off the raw tracks and enters it at $2003. The volume is
  * still an ordinary ProDOS one -- only block 0 differs -- so ProRWTS2 can find
  * STORY by name and the files can be copied off with any ProDOS tool.
  *
@@ -29,12 +28,10 @@
  * build the 800k disk as well; if not, we say where to get one and carry on.
  *
  * AAM.SYSTEM is a ProDOS system program, type SYS ($ff), load address
- * $2000.  ProDOS runs the first *.SYSTEM file in the volume directory at
- * boot, so it should be the only one on the disk. It has a stub to relocate
- * it to its final address of 0x800.
+ * $2000. 0boot expects this file at certain blocks, so let the bundler handle it.
  *
- * STORY is read through the MLI a page at a time and never loaded whole,
- * so its file type should be $06 (binary)
+ * STORY is read through the a page at a time and never loaded whole,
+ * so its file type should be $06 (binary). It's padded to 256-byte pages.
  *
  * SAVEFILE is an empty 4 kB file on the boot volume.  ProRWTS2 can only write
  * to a file that already exists, and cannot change its length, so the
@@ -43,9 +40,10 @@
  * fits, the single disk is built without one and a two-disk set is built
  * alongside it, so there is always a way to save.
  *
- * IMPORTANT:
  * The disk volume containing the story file must be named "AA.STORY"
  * but it need not be the same as the boot/interpreter volume.
+ * This mainly applies when booting from "real" ProDOS, because ProRWTS
+ * doesn't do a volume scan.
  */
 
 static char storyname[48];
