@@ -76,6 +76,10 @@
 ; It has a separate entry point ($2003) for 0boot which
 ; stubs out the few ProDOS calls ProRWTS2 needs to init.
 ;
+; Note -- the volume containing the STORY file should be
+; called AA.STORY, especially if you are booting from a
+; real ProDOS.
+;
 ; Main memory map (ProRWTS2)
 ; =====================================
 ;  0800 - 2000	interpreter code
@@ -90,7 +94,8 @@
 ;   https://github.com/peterferrie/0boot
 ;
 ; TODO
-; - run AAM.SYSTEM from already-booted ProDOS w/ story on drive 2
+; - SAVEFILE on first disk when running AAM.SYSTEM from Prodos?
+; - run STORY file from subdirectory?
 ; - victim cache (move stale pages to aux)?
 ; - use the packer instead of boot mover?
 ; - save/restore filenames or multiple slots?
@@ -381,34 +386,30 @@ prorwts_rdwrpart = prorwts_reloc + 0
 prorwts_opendir	 = prorwts_reloc + 3
 #endif
 
-; ProDOS loads a SYS file at $2000 and jumps
-; there, but the interpreter has to run at
-; $0800 -- leaving it at $2000 costs 6 kB of
-; page cache, which is more than a large
-; story can spare.
+; ProDOS loads a SYS file at $2000,
+; but the interpreter has to run at $800.
 
 	* = $2000
 #if PRODOS || PRORWTS
-; ProDOS launches a SYS file by loading it at
-; $2000 and jumping there.  0boot enters three
-; bytes further along instead, which is how we
+; 0boot enters at $2003 which is how we
 ; know there is no ProDOS underneath us and the
-; global page has to be faked before ProRWTS2
-; can initialise.  Two jumps, so the entry
-; points keep their addresses whatever else
-; moves around.
+; MLI/global page has to be faked before ProRWTS2
+; can initialise.
 
-	jmp	boot_entry
 #if PRORWTS
+	jmp	boot_entry
 	jmp	raw_entry
 #endif
 
 ; First, we move the mover to $300...
 boot_entry
 	.(
-	sei
-	cld
 #if PRORWTS
+	; first, set prefix to /AA.STORY
+	; this is a no-op unless we booted from a real ProDOS
+	jsr	MLI
+	.byt	$c6		; SET_PREFIX
+	.word	p_set_prefix
 	; we have to call prorwts2_init here first,
 	; before we copy over ProDOS in the language card
 	jsr	prorwts2_init
@@ -424,6 +425,13 @@ copy
 	.)
 
 #if PRORWTS
+p_set_prefix
+	.byt	1
+	.word	vol_prefix
+vol_prefix
+	.byte	8+1
+	.asc	"/AA.STORY"
+
 ; 0boot loads us the way ProDOS would and leaves
 ; DEVNUM at $bf30, so all that is missing is the
 ; MLI.  Plant the stub, then join the normal
@@ -1240,11 +1248,12 @@ noeor
 ; The story file is reopened after every save
 ; and load, so its name has to outlive the init
 ; segment that opens it the first time.
-; TODO only if SAVERESTORE is defined
 
+#if PRODOS
 pathname_full
 	.byt	5+8+2
 	.asc	"/AA.STORY/STORY"
+#endif
 pathname_short
 	.byt	5
 	.asc	"STORY"
@@ -1253,8 +1262,7 @@ pathname_short
 ; Saved games
 ; =====================================
 ;
-; One slot, a file called SAVEFILE alongside
-; STORY.  ProDOS wants a kilobyte of buffer for
+; ProDOS wants a kilobyte of buffer for
 ; every open file and main memory has none to
 ; spare, so STORY is closed for the duration
 ; and lends SAVEFILE its buffer.  Nothing is

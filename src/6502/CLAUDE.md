@@ -203,6 +203,9 @@ tracers are selected with `-trace cpu|mos|mli|ss|ssreg`.
 printf 'run 20000\ntext\nquit\n' | izheadless -model 2enh disk.po
 ```
 
+Another example:
+`aamachine % ./makedsk.sh && echo "-/aa.story/aam.system" | ~/bin/izconsole --trace mli prodos402.dsk example/dungeon/Dungeon--77.dsk`
+
 Caveats learned the hard way:
 
 * The emulator **starts running immediately at NTSC speed** and keeps running
