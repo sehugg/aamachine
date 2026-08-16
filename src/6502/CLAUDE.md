@@ -401,6 +401,75 @@ at `a2_prorwts2.acme:252` and the MLI is never called again on the floppy path.
 The stub is disposable: `RAMEND` is `$c000` in the PRORWTS build, so the heap
 eats `$bf00` immediately afterwards.
 
+### Launching AAM.SYSTEM from an already-booted ProDOS
+
+The 800k disk (`build_800k` in `bundle_apple2.c`) falls back to a
+non-bootable data volume (just `AAM.SYSTEM` + `STORY` + `SAVEFILE`, no
+`PRODOS`/boot blocks) when no ProDOS release image was available at
+bundling time. The readme tells people to boot ProDOS from elsewhere and
+type `-/AA.STORY/AAM.SYSTEM` from the `BASIC.SYSTEM` prompt. As of 2026-08,
+**this does not reliably find `STORY`**; drive 2 of the slot is a confirmed
+failure case.
+
+What's confirmed by reading the code:
+
+* `boot_entry` (the `$2000` ProDOS entry) calls `prorwts2_init` immediately,
+  before the mover overwrites ProDOS -- so `init`'s `GET_PREFIX` and `DEVNUM`
+  reads (`a2_prorwts2.acme:252` onward) are talking to the *real*, live
+  ProDOS, not a faked stub. This is the opposite of the `$2003`/0boot path,
+  where `raw_entry` plants `mlistub` to force an *empty* prefix (see "Faking
+  the ProDOS global page" above).
+* `allow_subdir = 0`, and `openstory`'s `PRORWTS` variant (`a2_frontend.s`,
+  around `storyparms`/`openstory:3211`) opens `STORY` by bare name
+  (`pathname_short`) with no path component. The directory it searches is
+  whatever block `init` cached from that one live `GET_PREFIX` call --
+  cached once, at boot, never rechecked.
+* `openstory`'s retry loop (`cur_drive`/`storydrive`) only toggles bit 7 of
+  `prorwts_reqcmd`, ProRWTS2's "swap to the other drive *in this slot*" bit
+  -- it never looks at another slot. It exists for the 0boot two-disk case
+  (boot disk in drive 1, story disk in drive 2 of the same slot) and has
+  never been exercised against a real ProDOS boot from a separate device.
+* `DEVADR01HI` is indexed by slot only (`$bf11 + 2*slot`, see above), not by
+  drive -- so there is no drive-parity bug in the slot-detection code
+  itself. The drive-2 failure the user hit has to come from somewhere else.
+
+Two candidate root causes, neither confirmed against real hardware or the
+emulator yet:
+
+1. **Stale or wrong prefix.** ProDOS 8's system-program launch convention
+   (used by `BASIC.SYSTEM`'s `-` command) does not itself set the prefix to
+   the invoked pathname's directory -- that is left to the program.
+   `AAM.SYSTEM` never calls `SET_PREFIX`, so if the prefix in effect at
+   launch time is not already `/AA.STORY/`, `init`'s directory-block cache
+   points at the wrong directory and no amount of drive-retrying finds
+   `STORY`, on either drive.
+2. **Wrong slot.** If `/AA.STORY/` is a real 3.5"/SmartPort device on a
+   different slot than the one `DEVNUM` names at `boot_entry` time (e.g. the
+   boot disk and the story disk are on different controllers/interfaces),
+   `openstory`'s same-slot retry can never reach it, regardless of drive.
+
+**Current decision:** rather than chase this further, the disk and readme
+now just require the AA.STORY disk to be drive 1 of its slot
+(`readme_800k_noboot` in `bundle_apple2.c`) -- that is the one configuration
+this driver was actually built and exercised against (0boot always boots
+drive 1). Launching from an already-booted ProDOS with the story on drive 2,
+or on a different slot than the boot device, remains unverified and is not
+promised to work.
+
+Potential fixes, if this is revisited:
+
+* Have `AAM.SYSTEM` call `SET_PREFIX` to its own directory before ProRWTS2's
+  `init` runs, using the invoking pathname if ProDOS exposes it at that
+  entry point (check against the ProDOS 8 Technical Reference Manual).
+* Extend `openstory`'s retry to also walk `DEVADR01HI`'s other slots,
+  turning the same-slot drive swap into a real device search -- more
+  invasive, and duplicates work `a2_prorwts2.acme`'s own slot-scan fallback
+  already does inside `init` (which the exact-DEVNUM-match fast path skips
+  whenever it succeeds).
+* Verify empirically first, with the `aambox6502` emulator and a debugger:
+  confirm what `GET_PREFIX` actually returns when a `-/AA.STORY/AAM.SYSTEM`
+  launch is simulated, before writing any fix based on the above.
+
 ### MACHID
 
 There is no ProDOS to ask, so `setmachid` in `a2_frontend.s` works out the
@@ -483,6 +552,10 @@ Apple II items in flight:
   its own inverse) when writing a 140k disk, because most emulators and
   disk-writing tools expect DOS 3.3 sector order from a 5.25" image; 800k
   images have no such split and stay `.po`.
+* **Launching the non-bootable 800k disk from an already-booted ProDOS is
+  unreliable.** See "Launching AAM.SYSTEM from an already-booted ProDOS"
+  above for the mechanism and candidate causes. Current workaround: require
+  the AA.STORY disk to be drive 1 of its slot; not fixed in code.
 * RWTS18 is still only sketched in the `a2_frontend.s` header comment as a
   future storage backend.
 * **Victim cache** (moving evicted page-cache pages to aux instead of
