@@ -43,6 +43,7 @@ aamshow: aamshow.c crc32.c aavm.c aavm.h crc32.h
 aambundle: aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c \
 	table_a2terp.h \
 	table_a20boot.h \
+	table_a2sboot.h \
 	table_a2license.h \
 	table_c64license.h \
 	table_c64drive.h \
@@ -74,6 +75,7 @@ aamshow.exe: aamshow.c crc32.c aavm.c aavm.h crc32.h
 aambundle.exe: aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c \
 	table_a2terp.h \
 	table_a20boot.h \
+	table_a2sboot.h \
 	table_a2license.h \
 	table_c64license.h \
 	table_c64drive.h \
@@ -92,6 +94,9 @@ table_a2terp.h:		6502 6502/a2.system mkheader
 
 table_a20boot.h:	6502 6502/a2_0boot.bin mkheader
 			./mkheader table_a20boot <6502/a2_0boot.bin >$@
+
+table_a2sboot.h:	6502 6502/a2_sboot.bin mkheader
+			./mkheader table_a2sboot <6502/a2_sboot.bin >$@
 
 table_a2license.h:	6502 6502/license.txt 6502/a2_thirdparty_license.txt mkheader
 			cat 6502/license.txt 6502/a2_thirdparty_license.txt | ./mkheader table_a2license >$@
