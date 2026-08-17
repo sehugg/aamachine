@@ -19,7 +19,6 @@
 #              2 usage error
 #              3 emulator died or hung before finishing
 
-set timeout 10
 set target [lindex $argv 0]
 set dsk    [lindex $argv 1]
 set arg3   [lindex $argv 2]
@@ -27,6 +26,7 @@ if {$target eq "" || $dsk eq ""} {
   puts stderr "usage: a2test.exp \"TARGET STRING\" dsk \[walkthrough-file | command string\] \[-- izconsole flags...\]"
   exit 2
 }
+puts $argv
 
 set lines {}
 if {$arg3 ne ""} {
@@ -52,6 +52,7 @@ spawn -noecho ~/bin/izconsole -speed full {*}$izflags $dsk
 
 # wait for the game prompt (or the target, which may appear in the intro)
 expect {
+  -timeout 10
   -exact $target { puts "TARGET FOUND in intro"; exit 0 }
   "> " { }
   eof   { puts "emulator exited before prompt"; exit 3 }
@@ -65,28 +66,30 @@ foreach line $lines {
   incr n
   send -- "$line\r"
   expect {
+    -timeout 10
     -exact $target {
       set found 1
       puts "TARGET FOUND (command $n: \"$line\")"
       break
     }
     "> " { }        ;# this command completed, keep going
-    eof   { puts "emulator exited (command $n: \"$line\")"; exit 3 }
-    timeout { puts "timed out after command $n: \"$line\""; exit 3 }
+    eof   { puts "*** emulator exited (command $n: \"$line\")"; exit 3 }
+    timeout { puts "*** timed out after command $n: \"$line\""; exit 3 }
   }
 }
 
 if {!$found} {
   expect {
+    -timeout 60
     -exact $target {
       set found 1
       puts "TARGET FOUND"
     }
-    eof   { puts "emulator exited"; exit 3 }
-    timeout { puts "timed out"; exit 3 }
+    eof   { puts "*** emulator exited"; exit 3 }
+    timeout { puts "*** timed out"; exit 3 }
   }
 }
 
-if {!$found} { puts "TARGET NOT FOUND after $n commands" }
+if {!$found} { puts "*** TARGET NOT FOUND after $n commands" }
 close
 exit [expr {$found ? 0 : 1}]
