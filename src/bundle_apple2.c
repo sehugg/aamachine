@@ -14,20 +14,18 @@
 
 /* Apple II bundling.
  *
- * The two pieces that go on the disk are emitted as plain files, for the
- * author to copy onto a ProDOS volume with whatever tool they prefer.
- *
  * 140k disks boot with 0boot, Peter Ferrie's track loader, which reads
  * AAM.SYSTEM straight off the raw tracks and enters it at $2003. The volume is
  * still an ordinary ProDOS one -- only block 0 differs -- so ProRWTS2 can find
  * STORY by name and the files can be copied off with any ProDOS tool.
+ * These disks are DOS 3.3 order (.dsk) not ProDOS order (.po)
  *
- * 0boot only understands 5.25" tracks, so 800k (and bigger) images boot with
- * a2sboot instead: a from-scratch SmartPort block-0 loader that reads the
- * volume directory itself to find AAM.SYSTEM (walking its seedling/sapling/
- * tree data blocks, whichever it is), loads it to $2000 and enters at $2003,
- * same as 0boot.  No ProDOS kernel or boot blocks -- Apple's and not ours to
- * ship -- are needed on either disk size.
+ * 0boot only understands 5.25" tracks, so 800k images boot with a2sboot
+ * instead: a from-scratch SmartPort block-0 loader.  Like 0boot it does not
+ * walk the volume directory -- it just reads a fixed run of blocks, known at
+ * assemble time, straight to $2000 and enters at $2003.  See build_800k and
+ * a2_sboot.s for how the bundler and the loader agree on where that run is.
+ * No ProDOS kernel or boot blocks are needed on either disk size.
  *
  * AAM.SYSTEM is a ProDOS system program, type SYS ($ff), load address
  * $2000.
@@ -629,16 +627,6 @@ static const char readme_build[] =
 "               it the story cannot be saved.  It goes on the boot\n"
 "               volume, next to AAM.SYSTEM.\n"
 "\n"
-"With AppleCommander (https://applecommander.github.io/):\n"
-"\n"
-"  ac -cc65 disk.po AA.STORY 800k\n"
-"  ac -p disk.po AAM.SYSTEM SYS 0x2000 <AAM.SYSTEM\n"
-"  ac -p disk.po STORY BIN 0x0000 <STORY\n"
-"  ac -p disk.po SAVEFILE BIN 0x0000 <SAVEFILE\n"
-"\n"
-"That disk will not be self-booting -- it needs a2sboot or a real\n"
-"ProDOS in block 0 for that -- but any ProDOS tool can read it.\n"
-"\n"
 ;
 
 static void write_readme(char *dirname, int mode, const char *single, const char *bootdisk, const char *storydisk, const char *bigdisk) {
@@ -696,13 +684,21 @@ static char *disk_name(const char *suffix, const char *ext) {
 	return name;
 }
 
+/* a2sboot reads AAM.SYSTEM's data blocks the dumb way -- a fixed run of
+ * AAM_BLOCKS blocks starting at AAMSTART, both baked into a2_sboot.s at
+ * assemble time (see its Makefile rule and header comment) -- rather than
+ * walking the volume directory at boot.  That only works if AAM.SYSTEM is
+ * the first file allocated on a freshly formatted volume, so its data blocks
+ * land contiguously right there (see vol_write_sapling); passing first_data
+ * explicitly here (rather than 0, "use the default") turns on build_disk's
+ * existing contiguity check, the same one that guards 0boot, so a layout
+ * that ever breaks this assumption fails the build loudly instead of
+ * shipping a disk that boots into garbage.  Must equal AAMSTART. */
+#define SBOOT_FIRST_DATA	(BITMAP_BLOCK + 1)
+
 /* Builds the 800k image, self-booting via a2sboot.  Sets *bigdisk.  The
  * story not fitting on an 800k disk at all is a hard error, handled here
- * rather than passed back.
- *
- * a2sboot walks the volume directory to find AAM.SYSTEM, so unlike 0boot it
- * places no requirement on which block it starts at -- default first_data
- * (just past the bitmap) is fine. */
+ * rather than passed back. */
 static void build_800k(char *dirname, const struct diskfile *aam, const struct diskfile *storyfile, char **bigdisk) {
 	struct diskfile files[3];
 
@@ -713,9 +709,9 @@ static void build_800k(char *dirname, const struct diskfile *aam, const struct d
 	*bigdisk = disk_name("-800k", ".po");
 
 	if(build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
-		table_a2sboot, sizeof(table_a2sboot), 0, files, 3)
+		table_a2sboot, sizeof(table_a2sboot), SBOOT_FIRST_DATA, files, 3)
 	&& build_disk(dirname, *bigdisk, "AA.STORY", BLOCKS_800K,
-		table_a2sboot, sizeof(table_a2sboot), 0, files, 2)) {
+		table_a2sboot, sizeof(table_a2sboot), SBOOT_FIRST_DATA, files, 2)) {
 		fprintf(stderr, "%s: story too large for an 800k disk\n", *bigdisk);
 		exit(1);
 	}

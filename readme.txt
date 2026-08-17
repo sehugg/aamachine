@@ -102,7 +102,8 @@ Then type: RUN
 
 To run the example story using an online Apple II emulator, go to
 <https://apple2ts.com/> then drag one of the bootable disk images
-to the page.
+to the page. You can also run from the command line using a console
+emulator such as <https://github.com/ivanizag/izapple2>.
 
 To build the Å-machine tools under Linux (requires a C compiler and make):
 
