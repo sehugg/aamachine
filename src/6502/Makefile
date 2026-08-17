@@ -1,11 +1,11 @@
 VERSION=1.0.2
 CFLAGS=-Wall -O2 -DVERSION=\"$(VERSION)\"
 
-all:			aambox6502 aambox_frontend.bin c64_crunched.bin c64_drivecode.bin c64_loader.prg a2.system a2_0boot.bin
+all:			aambox6502 aambox_frontend.bin c64_crunched.bin c64_drivecode.bin c64_loader.prg a2.system a2_0boot.bin a2_sboot.bin
 
 clean:
 			rm -rf aambox6502 cruncher labels c64.labels mkfont
-			rm -f a2_frontend.bin a2_prorwts2.bin a2.labels a2.system a2_0boot.bin
+			rm -f a2_frontend.bin a2_prorwts2.bin a2.labels a2.system a2_0boot.bin a2_sboot.bin a2_sboot.labels
 
 aambox6502:		aambox6502.c fake6502.c
 
@@ -32,6 +32,9 @@ c64_crunched.bin:	c64_frontend.bin decruncher.bin cruncher
 
 a2_0boot.bin:		0boot.acme a2.system
 			acme -DA2_TRACKS=$$((($$(wc -c < a2.system) + 4095) / 4096)) -o $@ $<
+
+a2_sboot.bin:		a2_sboot.s
+			xa -l a2_sboot.labels -o $@ $<
 
 a2_prorwts2.bin:	a2_prorwts2.acme a2_frontend.bin
 			acme -DPRORWTS_ORG=$$(($$(wc -c < a2_frontend.bin) + 8192)) -l a2_prorwts2.sym -r a2_prorwts2.rpt $<
