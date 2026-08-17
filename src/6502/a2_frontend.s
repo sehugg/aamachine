@@ -94,6 +94,8 @@
 ;   https://github.com/peterferrie/0boot
 ;
 ; TODO
+; - io_load flaky (hangs, inserting nop makes it say "Failed to *save* game state")
+;   and the savefiles differ at $300
 ; - SAVEFILE on first disk when running AAM.SYSTEM from Prodos?
 ; - run STORY file from subdirectory?
 ; - victim cache (move stale pages to aux)?
@@ -1196,7 +1198,9 @@ io_quit
 	jsr	mlicall
 #endif
 	inc	$3f4		; modify pwrup checksum so we reboot
-	ROMTAILCALL($fa62)	; reset
+halt
+	bit	LCROM2
+	jmp	halt		; wait for reset
 	.)
 
 io_restart
