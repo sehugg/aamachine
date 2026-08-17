@@ -3288,3 +3288,6 @@ SAVEADDR = ((initsegment + $ff) >> 8) << 8
 prorwts2_init = * + $2000 - $800 + boothdrlen + himem_end - himem_start
 #endif
 
+; Make sure the engine fits in the language card area
+.assert himem_start == $d000, "A2_ENGINE_HIMEM: engine code must start at $d000"
+.assert himem_end <= $f800, "A2_ENGINE_HIMEM: engine code exceeds LC RAM"

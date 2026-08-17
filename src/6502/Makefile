@@ -30,7 +30,7 @@ decruncher.bin:		decruncher.s
 c64_crunched.bin:	c64_frontend.bin decruncher.bin cruncher
 			./cruncher $< decruncher.bin >$@
 
-a2_0boot.bin:		0boot.acme a2.system
+a2_0boot.bin:		a2_0boot.acme a2.system
 			acme -DA2_TRACKS=$$((($$(wc -c < a2.system) + 4095) / 4096)) -o $@ $<
 
 a2_sboot.bin:		a2_sboot.s a2.system
