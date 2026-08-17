@@ -8186,7 +8186,17 @@ ext0_restore
 	sta	physize+1
 
 #ifdef A2_EVICT_MAX
-	ldx	#>(SAVEADDR+SAVEMAXBYTES)
+	; io_load may refill the whole
+	; SAVEMAXBYTES window whatever the image
+	; really weighs, so every page it can
+	; reach has to go, up to and including the
+	; one holding the last byte. That last one
+	; is a partial page unless SAVEADDR is
+	; page aligned, hence unmap1 rather than
+	; falling into the dex.
+
+	ldx	#>(SAVEADDR+SAVEMAXBYTES-1)
+	bne	unmap1		; always, page is nonzero
 #else
 	tax
 	lda	physize
