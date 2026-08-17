@@ -3268,7 +3268,17 @@ RAMEND = $c000
 
 SAFEPG = (* + $ff) >> 8		; after init routines
 
-SAVEADDR = initsegment		; over init routines
+; Over the init routines, but rounded up to a
+; page boundary. The engine reserves the save
+; window by page number -- it keeps the page
+; cache above >(SAVEADDR+SAVEMAXBYTES) while an
+; image is being built, and drops that same
+; range of pages before a restore. Unaligned,
+; the last partial page is shared between the
+; savefile buffer and a live cache page in both
+; places.
+
+SAVEADDR = ((initsegment + $ff) >> 8) << 8
 
 ; the ProRWTS2 library is at the end of the file
 ; but it does not have to be moved, it will
