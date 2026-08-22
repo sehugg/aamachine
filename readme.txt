@@ -8,7 +8,7 @@ The following interpreters are included:
 	* Javascript engine, web frontend.
 	* Javascript engine, Node.js frontend.
 	* 6502 engine, Commodore 64 frontend.
-	* 6502 engine, Apple II+ and //e frontend.
+	* 6502 engine, Apple II frontend.
 	* 6502 engine, aambox6502 frontend.
 
 Version number:
@@ -120,7 +120,7 @@ To cross-compile the Windows version of the Å-machine tools under Linux
 
 Note that when aambundle is built, several files are copied from src/js and
 src/6502 into the resulting executable file. To rebuild the binary files in
-src/6502, run "make" in that directory. This requires the xa65 and acme
+src/6502, run "make" in that directory. This requires the xa65 and ACME
 assemblers.
 
 Project website:
@@ -133,6 +133,12 @@ Release notes:
 
 		6502 engine: Fixed some memory corruption issues, especially
 		involving save/restore/undo operations.
+
+		New Apple II interpreter: Supports Apple II+ and newer with
+		64 or 128 kB, 40 or 80 columns. Aambundle builds 140 kB and
+		800 kB ProDOS-format disk images, using custom bootloaders
+		so that no actual ProDOS system image is needed.
+		Save/restore is supported with only one slot at the moment.
 
 	1.0.2:
 	
