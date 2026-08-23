@@ -26,7 +26,6 @@ if {$target eq "" || $dsk eq ""} {
   puts stderr "usage: a2test.exp \"TARGET STRING\" dsk \[walkthrough-file | command string\] \[-- izconsole flags...\]"
   exit 2
 }
-puts $argv
 
 set lines {}
 if {$arg3 ne ""} {
