@@ -513,7 +513,7 @@ static const char readme_head[] =
 "\n"
 "Requires 64 kB.  All the disks boot by themselves and need no ProDOS.\n"
 "\n"
-"The interpreter identifies the machine at boot and adapts to it:\n"
+"The interpreter identifies the machine at boot time:\n"
 "\n"
 "  Apple ][+            40 columns, upper case only\n"
 "  //e / //c / IIgs     80 columns when an 80-column card is present\n"
@@ -574,22 +574,37 @@ static const char readme_toobig[] =
 static const char readme_800k[] =
 "  %s\n"
 "       The same thing on one 800 kB disk, volume /AA.STORY, for a\n"
-"       3.5\" drive or a hard disk.  It boots with a2sboot, a SmartPort\n"
-"       block-0 loader that reads the volume directory to find\n"
-"       AAM.SYSTEM itself, so it needs no ProDOS kernel or boot blocks\n"
-"       either.\n"
+"       3.5\" drive or an emulator.\n"
 "\n"
 ;
 
-static const char readme_boot0[] =
-"The 140 kB disks boot with 0boot, Peter Ferrie's track loader\n"
-"(https://github.com/peterferrie/0boot), which reads the interpreter\n"
-"off the raw tracks rather than going through ProDOS.  The 800 kB disk\n"
-"boots with a2sboot instead, since 0boot only understands 5.25\" tracks;\n"
-"it is a from-scratch SmartPort loader that finds AAM.SYSTEM by walking\n"
-"the volume directory, so the file does not need to sit at any\n"
-"particular block.  Either way the volume is an ordinary ProDOS one\n"
-"otherwise, so the files can be copied off with any ProDOS tool.\n"
+static const char readme_emul[] =
+"Running on an Emulator\n"
+"----------------------\n"
+"\n"
+"The disk images boot in any Apple II emulator.  The easiest one to\n"
+"reach is Apple2TS, which runs in a browser with nothing to install:\n"
+"\n"
+"  https://apple2ts.com\n"
+"\n"
+"Drop the 800 kb image onto the window, or use its disk menu to pick\n"
+"from your machine, and it boots into the story.\n"
+"\n"
+"The 140 kB images are 5.25\" floppies and go into a Disk ][ drive.\n"
+;
+
+/* Only when there is an 800k image. */
+static const char readme_emul_800k[] =
+"The 800 kB image is a 3.5\" disk and has to go into an emulated 3.5\"\n"
+"drive: it boots through SmartPort, so a slot configured as a plain\n"
+"ProDOS hard disk will not start it.\n"
+;
+
+static const char readme_emul_tail[] =
+"\n"
+"To save, the boot disk has to be write enabled, and the emulator has\n"
+"to keep the change: in Apple2TS use \"Save Disk to Device\" to download\n"
+"the modified image, or the saved game goes away with the browser tab.\n"
 "\n"
 ;
 
@@ -627,6 +642,9 @@ static const char readme_build[] =
 "               it the story cannot be saved.  It goes on the boot\n"
 "               volume, next to AAM.SYSTEM.\n"
 "\n"
+"When booting from real ProDOS, name the volume containing the story\n"
+"file AA.STORY because the interpreter will scan for it by volume path.\n"
+"\n"
 ;
 
 static void write_readme(char *dirname, int mode, const char *single, const char *bootdisk, const char *storydisk, const char *bigdisk) {
@@ -635,8 +653,9 @@ static void write_readme(char *dirname, int mode, const char *single, const char
 
 	size = sizeof(readme_head) + sizeof(readme_single) + sizeof(readme_split)
 		+ sizeof(readme_both) + sizeof(readme_toobig) + sizeof(readme_800k)
-		+ sizeof(readme_boot0)
-		+ sizeof(readme_save) + sizeof(readme_build);
+		+ sizeof(readme_emul) + sizeof(readme_emul_800k)
+		+ sizeof(readme_emul_tail) + sizeof(readme_save)
+		+ sizeof(readme_build);
 	if(single) size += strlen(single);
 	if(bootdisk) size += strlen(bootdisk) + strlen(storydisk);
 	if(bigdisk) size += strlen(bigdisk);
@@ -664,9 +683,14 @@ static void write_readme(char *dirname, int mode, const char *single, const char
 	if(bigdisk) {
 		sprintf(text + strlen(text), readme_800k, bigdisk);
 	}
-	strcat(text, readme_boot0);
 	strcat(text, readme_save);
 	strcat(text, readme_build);
+
+	strcat(text, readme_emul);
+	if(bigdisk) {
+		strcat(text, readme_emul_800k);
+	}
+	strcat(text, readme_emul_tail);
 
 	writefile(dirname, "readme.txt", (const uint8_t *) text, strlen(text));
 	free(text);

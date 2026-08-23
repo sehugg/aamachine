@@ -22,3 +22,16 @@ modification, are permitted provided that the following conditions are met:
 	THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 	(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 	OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+---
+
+The Apple II disk images make use of 0boot and prorwts2, which are
+redistributed inside this archive in compliance with the BSD-3 license:
+
+	Copyright (c) Peter Ferrie 2013-2022
+
+Same license as above, with this additional clause:
+
+	3.  Neither the name of the copyright holder nor the names of its
+	contributors may be used to endorse or promote products derived from
+	this software without specific prior written permission.
