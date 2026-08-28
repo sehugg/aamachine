@@ -14,6 +14,8 @@
 
 #include "tables_6502font.h"
 
+#define AAKBD_C64	"\\_`{|}~"
+
 #define INTERLEAVE 11
 
 static char storyname[48];
@@ -140,7 +142,7 @@ void c64_chunk_visitor(char *head, char *dirname, uint8_t *chunk, uint32_t size)
 	} else {
 		return;
 	}
-	
+
 	if(langchunk && dictchunk) {
 		warn_about_nonascii(dictchunk, dictsize, langchunk, langsize);
 	}
@@ -162,7 +164,9 @@ void bundle_c64(char *dirname) {
 	memset(available, 1, j);
 
 	visit_chunks(storyname, sizeof(storyname), c64_chunk_visitor);
-	trim_chunks(1);
+	check_charset("c64", AAGLYPH_BITMAP);
+	check_keyboard("c64", AAKBD_C64);
+	rewrite_chunks(rewrite_6502, 1);
 
 	fnsize = strlen(dirname) + strlen(storyname) + 64;
 	filename = malloc(fnsize);
@@ -250,7 +254,7 @@ void bundle_c64(char *dirname) {
 	}
 	fwrite(image, 1, sizeof(image), outf);
 	fclose(outf);
-	
+
 	// Add the license
 	snprintf(filename, fnsize, "%s/interpreter_license.txt", dirname);
 	if(!(outf = fopen(filename, "wb"))) {

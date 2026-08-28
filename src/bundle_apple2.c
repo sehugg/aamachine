@@ -47,6 +47,8 @@
  * doesn't do a volume scan.
  */
 
+#define AAKBD_APPLE2	"\\_`{|}~[]"
+
 static char storyname[48];
 
 /* ProDOS on-disk layout.  Blocks are 512 bytes and .po images store them
@@ -532,7 +534,7 @@ void apple2_chunk_visitor(char *head, char *dirname, uint8_t *chunk, uint32_t si
 	} else {
 		return;
 	}
-	
+
 	if(langchunk && dictchunk) {
 		warn_about_nonascii(dictchunk, dictsize, langchunk, langsize);
 	}
@@ -689,6 +691,7 @@ static const char readme_build[] =
 "\n"
 "When booting from real ProDOS, name the volume containing the story\n"
 "file AA.STORY because the interpreter will scan for it by volume path.\n"
+"If it boots into BASIC, type -AAM.SYSTEM to start the interpeter.\n"
 "\n"
 ;
 
@@ -729,13 +732,14 @@ static void write_readme(char *dirname, int mode, const char *single, const char
 		sprintf(text + strlen(text), readme_800k, bigdisk);
 	}
 	strcat(text, readme_save);
-	strcat(text, readme_build);
 
 	strcat(text, readme_emul);
 	if(bigdisk) {
 		strcat(text, readme_emul_800k);
 	}
 	strcat(text, readme_emul_tail);
+
+	strcat(text, readme_build);
 
 	writefile(dirname, "readme.txt", (const uint8_t *) text, strlen(text));
 	free(text);
@@ -866,7 +870,9 @@ void bundle_apple2(char *dirname) {
 	int mode;
 
 	visit_chunks(storyname, sizeof(storyname), apple2_chunk_visitor);
-	trim_chunks(1);
+	check_charset("apple2", AAGLYPH_TRANSLIT);
+	check_keyboard("apple2", AAKBD_APPLE2);
+	rewrite_chunks(rewrite_6502, 1);
 
 	writefile(dirname, "AAM.SYSTEM", table_a2terp, sizeof(table_a2terp));
 	/* The interpreter reads STORY a page at a time, so round the file up

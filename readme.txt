@@ -162,6 +162,9 @@ Release notes:
 
 		C64 interpreter: Fixed inline progress bars.
 
+		Aambundle: Warn when bundling stories for 6502 that have
+		unsupported codepoints (see usage for warning flags)
+
 	1.0.2:
 	
 		Cleaned up the specification and some dev tools.

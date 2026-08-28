@@ -1,7 +1,7 @@
 VERSION=1.0.3
 CFLAGS=-Wall -O2 -DVERSION=\"$(VERSION)\"
 
-all:			aambox6502 aambox_frontend.bin c64_crunched.bin c64_drivecode.bin c64_loader.prg a2.system a2_0boot.bin a2_sboot.bin
+all:			aambox6502 aambox_frontend.bin c64_crunched.bin c64_drivecode.bin c64_loader.prg a2.system a2_0boot.bin a2_sboot.bin charset.h
 
 check_xa:
 	@if ! command -v xa >/dev/null 2>&1; then \
@@ -42,6 +42,12 @@ font.bin:		fontdef.txt mkfont
 
 translit.s:		fontdef.txt mkfont
 			./mkfont -t $@ <$<
+
+# The set of codepoints the c64 and apple2 can render, for aambundle to check
+# a story's LANG chunk against.
+
+charset.h:		fontdef.txt mkfont
+			./mkfont -c $@ <$<
 
 c64_drivecode.bin:	c64_drivecode.s | check_xa
 			xa -o $@ $<
