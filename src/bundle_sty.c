@@ -21,7 +21,7 @@
 // absolute only, fractional units truncated.
 // ============================================================================
 
-#define STY_VERSION	0x05
+#define STY_VERSION	0x06
 #define STY_TAG_AAMBOX  (0x00 | STY_VERSION)
 #define STY_TAG_C64     (0x10 | STY_VERSION)
 #define STY_TAG_APPLE2  (0x20 | STY_VERSION)
@@ -36,38 +36,52 @@
 
 #define NOCOLOR   0x80    // "$80 = not set" sentinel for the sty fg field
 
-#define XSTY_SIZE 5       // bytes per xsty record, incl. the class index
+#define XSTY_SIZE 6       // bytes per xsty record, incl. the class index
 
 // A body record's six colors, in xsty nibble order. Only declarations that
 // name the target explicitly (-iftf-c64-background-color and friends) fill
 // these in; see the body-record note above build_usty().
+// The eight palette entries are indexed by the low three AASTYLE bits
+// exactly as they arrive: reverse | bold << 1 | italic << 2. So io_mstyle
+// is "and #7 / tax / lda palette,x" -- no shifting, no special case for
+// reverse, and every combination gets its own color.
 enum {
 	BODY_BG, BODY_BORDER,
-	BODY_NORMAL, BODY_BOLD, BODY_ITALIC, BODY_BOLDITALIC,
-	BODY_REVERSE,
-	BODY_N
+	BODY_PAL,               // BODY_PAL + (style & 7)
+	BODY_N = BODY_PAL + 8
 };
 
 static const char *bodyprops[BODY_N] = {
 	"background-color", "border-color",
-	"normal-color", "bold-color", "italic-color", "bold-italic-color",
-	"reverse-color"
+	"normal-color",                 // 0  -
+	"reverse-color",                // 1  reverse
+	"bold-color",                   // 2  bold
+	"bold-reverse-color",           // 3  bold reverse
+	"italic-color",                 // 4  italic
+	"italic-reverse-color",         // 5  italic reverse
+	"bold-italic-color",            // 6  bold italic
+	"bold-italic-reverse-color"     // 7  bold italic reverse
 };
 
 // The c64 frontend's compiled-in defaults: a light grey screen and border
-// (c64_frontend.s:2564) and the four style colors of the palette table
-// (c64_frontend.s:521). The bundler resolves undeclared fields to these, so
-// SET_BODY writes every nibble with no presence tests.
+// (c64_frontend.s:2564) and the palette table (c64_frontend.s:521). The
+// bundler resolves undeclared fields to these, so SET_BODY writes every
+// nibble with no presence tests.
 //
-// Reverse is emitted ahead of the frontend that will use it: the c64 does
-// not render reverse video at all yet (io_mstyle drops the bit with
-// lsr / and #3, and nothing sets bit 7 of a screen code), and the Apple II,
-// which does render it (a2_frontend.s:1397), has no per-character color.
-// $0 is a placeholder default, matching normal -- a reversed cell paints
-// currfg as a solid block, and black blocks under light grey glyphs is
-// what the default screen colors want. Worth revisiting when the c64
-// actually draws reversed text.
-static const uint8_t c64_bodydef[BODY_N] = {0x0f, 0x0f, 0x00, 0x0b, 0x06, 0x0e, 0x00};
+// Today's palette has four entries indexed by bold | italic << 1, because
+// io_mstyle drops the reverse bit. Each reverse variant therefore defaults
+// to its non-reverse counterpart, which is exactly what the c64 renders
+// today -- the eight-entry table starts out behaving like the four-entry
+// one, and only differs where an author asks it to. (The c64 does not draw
+// reverse video at all yet; the Apple II does, a2_frontend.s:1397, but has
+// no per-character color.)
+static const uint8_t c64_bodydef[BODY_N] = {
+	0x0f, 0x0f,             // background, border
+	0x00, 0x00,             // -, reverse
+	0x0b, 0x0b,             // bold, bold reverse
+	0x06, 0x06,             // italic, italic reverse
+	0x0e, 0x0e              // bold italic, bold italic reverse
+};
 
 struct sty_target {
 	const char *name;
@@ -574,7 +588,7 @@ static styclass *parse_look(int *nclassp) {
 //
 // xsty holds body records, the one thing that genuinely cannot live in a
 // slot: SET_BODY rewrites the frontend's whole style palette plus the
-// screen and border registers, which is four bytes of payload against
+// screen and border registers, which is five bytes of payload against
 // sty's one spare byte. They stay keyed on the raw class index because
 // SET_BODY takes a class operand. The array is scanned, not indexed, so
 // the record size need not be a power of two.
@@ -608,7 +622,7 @@ static uint8_t *build_usty(uint32_t *sizep) {
 
 	for(i = 0; i < nclass; i++) {
 		uint8_t g[8], s[4];
-		int gs, ss;
+		int gs, ss, j;
 
 		make_geo(g, &cls[i]);
 		make_sty(s, &cls[i]);
@@ -635,9 +649,10 @@ static uint8_t *build_usty(uint32_t *sizep) {
 			uint8_t *x = xsty + nxsty * XSTY_SIZE;
 			x[0] = i;
 			x[1] = cls[i].body[BODY_BG] | (cls[i].body[BODY_BORDER] << 4);
-			x[2] = cls[i].body[BODY_NORMAL] | (cls[i].body[BODY_BOLD] << 4);
-			x[3] = cls[i].body[BODY_ITALIC] | (cls[i].body[BODY_BOLDITALIC] << 4);
-			x[4] = cls[i].body[BODY_REVERSE];        // high nibble reserved
+			for(j = 0; j < 4; j++) {
+				x[2 + j] = cls[i].body[BODY_PAL + j * 2]
+					| (cls[i].body[BODY_PAL + j * 2 + 1] << 4);
+			}
 			nxsty++;
 		}
 	}

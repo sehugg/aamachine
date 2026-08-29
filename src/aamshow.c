@@ -187,7 +187,7 @@ void decode_look(struct chunk *ch) {
 //     styidx[nclass]      ; class -> byte offset into sty (slot * 4)
 //     sty[nsty * 4]
 //     geo[ngeo * 8]
-//     xsty[nxsty * 5]
+//     xsty[nxsty * 6]
 //
 // Every array offset follows from the counts, so the header carries none.
 // The xsty record shape follows from the tag's target nibble.
@@ -195,8 +195,8 @@ void decode_look(struct chunk *ch) {
 // Keep in step with STY_VERSION in bundle_sty.c.
 // TODO: put constants in shared header file
 
-#define USTY_VERSION	5
-#define USTY_XSTY_SIZE	5
+#define USTY_VERSION	6
+#define USTY_XSTY_SIZE	6
 
 static void put_style_bits(uint8_t bits) {
 	int first = 1;
@@ -308,21 +308,26 @@ void decode_usty(struct chunk *ch) {
 	}
 
 	if(nxsty) {
-		// Body records: seven 4-bit colors, all seven always present (the
-		// bundler resolves undeclared ones to the frontend's defaults),
-		// plus one reserved nibble.
+		// Body records: background, border, then eight palette entries
+		// indexed by the low three style bits. All ten are always present;
+		// the bundler resolves undeclared ones to the frontend's defaults.
+		static const char *palnames[8] = {
+			"-", "R", "B", "BR", "I", "IR", "BI", "BIR"
+		};
+
 		printf("\nxsty (%d body records, %d bytes each):\n", nxsty, USTY_XSTY_SIZE);
+		printf("  palette index = reverse | bold << 1 | italic << 2"
+			"  (B=bold I=italic R=reverse)\n");
 		for(i = 0; i < nxsty; i++) {
 			uint8_t *x = d + xstyoffs + i * USTY_XSTY_SIZE;
+			int j;
 
-			printf("  %02x: class=%-3d background=%x border=%x"
-				"  normal=%x bold=%x italic=%x bold-italic=%x reverse=%x",
-				i, x[0],
-				x[1] & 15, x[1] >> 4,
-				x[2] & 15, x[2] >> 4,
-				x[3] & 15, x[3] >> 4,
-				x[4] & 15);
-			if(x[4] >> 4) printf("  (reserved nibble %x set!)", x[4] >> 4);
+			printf("  %02x: class=%-3d background=%x border=%x\n      palette:",
+				i, x[0], x[1] & 15, x[1] >> 4);
+			for(j = 0; j < 8; j++) {
+				printf(" [%s]=%x", palnames[j],
+					(j & 1)? x[2 + j / 2] >> 4 : x[2 + j / 2] & 15);
+			}
 			printf("\n");
 		}
 	}
