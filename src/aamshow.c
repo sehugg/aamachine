@@ -183,18 +183,19 @@ void decode_look(struct chunk *ch) {
 // 2   ngeo                ; incl. the reserved default record in slot 0
 // 3   nsty                ; incl. the reserved default record in slot 0
 // 4   nxsty
-// 5   xstysize
-// 6   geoidx[nclass]      ; class -> byte offset into geo (slot * 8)
+// 5   geoidx[nclass]      ; class -> byte offset into geo (slot * 8)
 //     styidx[nclass]      ; class -> byte offset into sty (slot * 4)
 //     sty[nsty * 4]
 //     geo[ngeo * 8]
-//     xsty[nxsty * xstysize]
+//     xsty[nxsty * 5]
 //
 // Every array offset follows from the counts, so the header carries none.
+// The xsty record shape follows from the tag's target nibble.
 //
 // Keep in step with STY_VERSION in bundle_sty.c.
 
-#define USTY_VERSION	2
+#define USTY_VERSION	4
+#define USTY_XSTY_SIZE	5
 
 static void put_style_bits(uint8_t bits) {
 	int first = 1;
@@ -212,12 +213,12 @@ static const char *align_names[] = {"left", "center", "right"};
 void decode_usty(struct chunk *ch) {
 	uint8_t *d = ch->data;
 	uint32_t size = ch->size;
-	uint8_t tag, nclass, ngeo, nsty, nxsty, xstysize;
+	uint8_t tag, nclass, ngeo, nsty, nxsty;
 	uint32_t geoidxoffs, styidxoffs, styoffs, geooffs, xstyoffs;
-	int i, j;
+	int i;
 	uint8_t fg;
 
-	if(size < 6) {
+	if(size < 5) {
 		printf("Chunk too small (%u bytes) to be a USTY table.\n", size);
 		return;
 	}
@@ -227,9 +228,8 @@ void decode_usty(struct chunk *ch) {
 	ngeo = d[2];
 	nsty = d[3];
 	nxsty = d[4];
-	xstysize = d[5];
 
-	geoidxoffs = 6;
+	geoidxoffs = 5;
 	styidxoffs = geoidxoffs + nclass;
 	styoffs = styidxoffs + nclass;
 	geooffs = styoffs + nsty * 4;
@@ -253,10 +253,10 @@ void decode_usty(struct chunk *ch) {
 		return;
 	}
 
-	printf("nclass: %d  ngeo: %d  nsty: %d  nxsty: %d  xstysize: %d\n",
-		nclass, ngeo, nsty, nxsty, xstysize);
+	printf("nclass: %d  ngeo: %d  nsty: %d  nxsty: %d\n",
+		nclass, ngeo, nsty, nxsty);
 
-	if(xstyoffs + nxsty * xstysize > size) {
+	if(xstyoffs + nxsty * USTY_XSTY_SIZE > size) {
 		printf("Warning: table extends past the end of the chunk (%u bytes).\n", size);
 		return;
 	}
@@ -307,12 +307,21 @@ void decode_usty(struct chunk *ch) {
 	}
 
 	if(nxsty) {
-		printf("\nxsty (%d records, %d bytes each):\n", nxsty, xstysize);
+		// Body records: seven 4-bit colors, all seven always present (the
+		// bundler resolves undeclared ones to the frontend's defaults),
+		// plus one reserved nibble.
+		printf("\nxsty (%d body records, %d bytes each):\n", nxsty, USTY_XSTY_SIZE);
 		for(i = 0; i < nxsty; i++) {
-			printf("  %02x: class=%d", i, d[xstyoffs + i * xstysize]);
-			for(j = 1; j < xstysize; j++) {
-				printf(" %02x", d[xstyoffs + i * xstysize + j]);
-			}
+			uint8_t *x = d + xstyoffs + i * USTY_XSTY_SIZE;
+
+			printf("  %02x: class=%-3d background=%x border=%x"
+				"  normal=%x bold=%x italic=%x bold-italic=%x reverse=%x",
+				i, x[0],
+				x[1] & 15, x[1] >> 4,
+				x[2] & 15, x[2] >> 4,
+				x[3] & 15, x[3] >> 4,
+				x[4] & 15);
+			if(x[4] >> 4) printf("  (reserved nibble %x set!)", x[4] >> 4);
 			printf("\n");
 		}
 	}

@@ -21,7 +21,7 @@
 // absolute only, fractional units truncated.
 // ============================================================================
 
-#define STY_VERSION	0x02
+#define STY_VERSION	0x04
 #define STY_TAG_AAMBOX  (0x00 | STY_VERSION)
 #define STY_TAG_C64     (0x10 | STY_VERSION)
 #define STY_TAG_APPLE2  (0x20 | STY_VERSION)
@@ -34,23 +34,57 @@
 #define STY_RELW  0x01
 #define STY_RELH  0x02
 
-#define NOCOLOR   0x80    // "$80 = not set" sentinel for fg/bg/border
+#define NOCOLOR   0x80    // "$80 = not set" sentinel for the sty fg field
+
+#define XSTY_SIZE 5       // bytes per xsty record, incl. the class index
+
+// A body record's six colors, in xsty nibble order. Only declarations that
+// name the target explicitly (-iftf-c64-background-color and friends) fill
+// these in; see the body-record note above build_usty().
+enum {
+	BODY_BG, BODY_BORDER,
+	BODY_NORMAL, BODY_BOLD, BODY_ITALIC, BODY_BOLDITALIC,
+	BODY_REVERSE,
+	BODY_N
+};
+
+static const char *bodyprops[BODY_N] = {
+	"background-color", "border-color",
+	"normal-color", "bold-color", "italic-color", "bold-italic-color",
+	"reverse-color"
+};
+
+// The c64 frontend's compiled-in defaults: a light grey screen and border
+// (c64_frontend.s:2564) and the four style colors of the palette table
+// (c64_frontend.s:521). The bundler resolves undeclared fields to these, so
+// SET_BODY writes every nibble with no presence tests.
+//
+// Reverse is emitted ahead of the frontend that will use it: the c64 does
+// not render reverse video at all yet (io_mstyle drops the bit with
+// lsr / and #3, and nothing sets bit 7 of a screen code), and the Apple II,
+// which does render it (a2_frontend.s:1397), has no per-character color.
+// $0 is a placeholder default, matching normal -- a reversed cell paints
+// currfg as a solid block, and black blocks under light grey glyphs is
+// what the default screen colors want. Worth revisiting when the c64
+// actually draws reversed text.
+static const uint8_t c64_bodydef[BODY_N] = {0x0f, 0x0f, 0x00, 0x0b, 0x06, 0x0e, 0x00};
 
 struct sty_target {
 	const char *name;
 	uint8_t tag;
 	int have_color;         // per-character fg color (c64)
-	uint8_t xstysize;       // bytes per xsty record incl. class index
+	const uint8_t *bodydef; // BODY_N defaults, or null if the target has
+	                        // no body records at all
 };
 
 static const struct sty_target sty_aambox = {
-	"aambox", STY_TAG_AAMBOX, 0, 1
+	"aambox", STY_TAG_AAMBOX, 0, 0
 };
 static const struct sty_target sty_c64 = {
-	"c64", STY_TAG_C64, 1, 4
+	"c64", STY_TAG_C64, 1, c64_bodydef
 };
 static const struct sty_target sty_apple2 = {
-	"apple2", STY_TAG_APPLE2, 0, 1
+	"apple2", STY_TAG_APPLE2, 0, 0
 };
 
 static const struct sty_target *sty_target;
@@ -67,7 +101,8 @@ typedef struct {
 	uint8_t flo;            // 0 none, 1 left, 2 right
 	uint8_t align;          // 0 left, 1 center, 2 right
 	uint8_t flags;          // STY_RELW | STY_RELH
-	uint8_t bg, border;     // xsty fields, NOCOLOR = not set
+	uint8_t body[BODY_N];   // xsty fields, only valid if hasbody
+	uint8_t hasbody;        // class declared at least one body color
 } styclass;
 
 // ----------------------------------------------------------------------------
@@ -303,6 +338,8 @@ static int matchval(const char *value, const char *word) {
 static void parse_decl(styclass *c, const char *p, int len) {
 	char buf[256];
 	char *colon, *key, *value, *bang, *q;
+	int prefixed = 0;
+	int i;
 
 	if(len >= (int) sizeof(buf)) len = sizeof(buf) - 1;
 	memcpy(buf, p, len);
@@ -334,6 +371,26 @@ static void parse_decl(styclass *c, const char *p, int len) {
 		*prop = 0;
 		if(strcmp(key, sty_target->name)) return;
 		key = prop + 1;
+		prefixed = 1;
+	}
+
+	// Body colors are only honored when the declaration named the target,
+	// because on the web these properties either mean something different
+	// (a div's background is not the screen background) or do not exist.
+	if(prefixed && sty_target->bodydef) {
+		for(i = 0; i < BODY_N; i++) {
+			if(!strcmp(key, bodyprops[i])) {
+				int ci;
+				if(parse_color(value, &ci)) {
+					if(!c->hasbody) {
+						memcpy(c->body, sty_target->bodydef, BODY_N);
+						c->hasbody = 1;
+					}
+					c->body[i] = ci;
+				}
+				return;
+			}
+		}
 	}
 
 	if(!strcmp(key, "width")) {
@@ -375,19 +432,16 @@ static void parse_decl(styclass *c, const char *p, int len) {
 	} else if(!strcmp(key, "text-decoration") || !strcmp(key, "reverse-video")) {
 		if(strstr(value, "reverse")) c->styon |= AASTYLE_REVERSE;
 		else if(!matchval(value, "inherit")) c->styoff |= AASTYLE_REVERSE;
-	} else if(sty_target->have_color) {
+	} else if(sty_target->have_color && !strcmp(key, "color")) {
 		int ci;
-		if(!strcmp(key, "color")) {
-			if(parse_color(value, &ci)) c->fg = ci;
-		} else if(!strcmp(key, "background-color")) {
-			if(parse_color(value, &ci)) c->bg = ci;
-		} else if(!strcmp(key, "border-color") || !strcmp(key, "border")) {
-			if(parse_color(value, &ci)) c->border = ci;
-		}
+		if(parse_color(value, &ci)) c->fg = ci;
 	}
-	// Anything else (font-size, padding, text-indent, border-radius,
-	// margin-right, --custom-properties, aria-*, style-name, ...) is
-	// ignored, as an interpreter must per the spec.
+	// Anything else is ignored, as an interpreter must per the spec. That
+	// includes background-color, border and border-color: a div's tint and
+	// a div's border are not the screen background and border registers,
+	// and every such declaration measured is a decorative web overlay on a
+	// class SET_BODY never sees. An author who wants the c64 screen colors
+	// says so with -iftf-c64-background-color.
 }
 
 // Build the two record types, in the exact byte order the 6502 engine
@@ -458,13 +512,11 @@ static styclass *parse_look(int *nclassp) {
 	cls = calloc(n, sizeof(styclass));
 	if(!cls) return 0;
 
-	// Colors default to "not set", which is not the same as black. Done up
+	// fg defaults to "not set", which is not the same as black. Done up
 	// front so that a truncated LOOK leaves the unparsed tail of the array
 	// looking like classes that set nothing, rather than black-on-black.
 	for(i = 0; i < n; i++) {
 		cls[i].fg = NOCOLOR;
-		cls[i].bg = NOCOLOR;
-		cls[i].border = NOCOLOR;
 	}
 
 	for(i = 0; i < n; i++) {
@@ -504,6 +556,19 @@ static styclass *parse_look(int *nclassp) {
 // Slot 0 of each array is the reserved all-default record, so a class that
 // sets nothing is an ordinary slot rather than a sentinel: the engine
 // applies a no-op record instead of branching around one.
+//
+// xsty holds body records, the one thing that genuinely cannot live in a
+// slot: SET_BODY rewrites the frontend's whole style palette plus the
+// screen and border registers, which is four bytes of payload against
+// sty's one spare byte. They stay keyed on the raw class index because
+// SET_BODY takes a class operand. The array is scanned, not indexed, so
+// the record size need not be a power of two.
+//
+// A class earns a body record only by naming the target explicitly
+// (-iftf-c64-background-color and friends). Deriving them from plain
+// background-color/border was wrong in every story measured: those
+// declarations sit on decorative inline divs that SET_BODY never sees,
+// while the real body classes carry nothing but CSS custom properties.
 
 static uint8_t *build_usty(uint32_t *sizep) {
 	styclass *cls;
@@ -511,7 +576,7 @@ static uint8_t *build_usty(uint32_t *sizep) {
 	uint8_t geo[STY_MAXGEO * 8], sty[STY_MAXSTY * 4];
 	int ngeo = 1, nsty = 1;         // slot 0 of each is the default record
 	uint8_t geoidx[256], styidx[256];
-	uint8_t xsty[256 * 4];
+	uint8_t xsty[256 * XSTY_SIZE];
 	int nxsty = 0;
 	uint8_t *out;
 	uint32_t size, styoffs, geooffs, xstyoffs;
@@ -547,15 +612,17 @@ static uint8_t *build_usty(uint32_t *sizep) {
 		geoidx[i] = gs * 8;
 		styidx[i] = ss * 4;
 
-		// Body-style (xsty) candidates: classes that set a background or
-		// border color. Keyed on the raw class index so two body classes
-		// differing only in background cannot be deduped onto one slot.
-		if(sty_target->have_color && (cls[i].bg != NOCOLOR || cls[i].border != NOCOLOR)) {
-			uint8_t *x = xsty + nxsty * sty_target->xstysize;
-			memset(x, 0, sty_target->xstysize);
+		// Body records, keyed on the raw class index because SET_BODY
+		// takes a class operand and this data is deliberately outside the
+		// slot dedup key. Two nibbles per byte; all six fields are always
+		// present, the undeclared ones resolved to the target's defaults.
+		if(cls[i].hasbody) {
+			uint8_t *x = xsty + nxsty * XSTY_SIZE;
 			x[0] = i;
-			if(sty_target->xstysize > 1) x[1] = cls[i].bg;
-			if(sty_target->xstysize > 2) x[2] = cls[i].border;
+			x[1] = cls[i].body[BODY_BG] | (cls[i].body[BODY_BORDER] << 4);
+			x[2] = cls[i].body[BODY_NORMAL] | (cls[i].body[BODY_BOLD] << 4);
+			x[3] = cls[i].body[BODY_ITALIC] | (cls[i].body[BODY_BOLDITALIC] << 4);
+			x[4] = cls[i].body[BODY_REVERSE];        // high nibble reserved
 			nxsty++;
 		}
 	}
@@ -563,10 +630,10 @@ static uint8_t *build_usty(uint32_t *sizep) {
 	// Chunk layout: a fixed header, then the two index tables, then the
 	// hot sty records, then the cold geo and xsty records. Every array
 	// offset follows from the counts, so the header carries no offsets.
-	styoffs = 6 + 2 * nclass;
+	styoffs = 5 + 2 * nclass;
 	geooffs = styoffs + nsty * 4;
 	xstyoffs = geooffs + ngeo * 8;
-	size = xstyoffs + nxsty * sty_target->xstysize;
+	size = xstyoffs + nxsty * XSTY_SIZE;
 	out = malloc(size);
 	if(!out) {
 		fprintf(stderr, "Out of memory.\n");
@@ -578,12 +645,11 @@ static uint8_t *build_usty(uint32_t *sizep) {
 	out[2] = ngeo;
 	out[3] = nsty;
 	out[4] = nxsty;
-	out[5] = sty_target->xstysize;
-	memcpy(out + 6, geoidx, nclass);
-	memcpy(out + 6 + nclass, styidx, nclass);
+	memcpy(out + 5, geoidx, nclass);
+	memcpy(out + 5 + nclass, styidx, nclass);
 	memcpy(out + styoffs, sty, nsty * 4);
 	memcpy(out + geooffs, geo, ngeo * 8);
-	memcpy(out + xstyoffs, xsty, nxsty * sty_target->xstysize);
+	memcpy(out + xstyoffs, xsty, nxsty * XSTY_SIZE);
 
 	free(cls);
 	*sizep = size;
