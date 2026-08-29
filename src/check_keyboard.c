@@ -245,6 +245,7 @@ void check_keyboard(const char *target_name, const char *untypeable) {
 	}
 
 	warning(
+		WARN_KEYBOARD,
 		"%d of the story's %d object names contain characters that "
 		"cannot be typed on the %s keyboard, so the player can never "
 		"name them: %s%s",

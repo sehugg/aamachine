@@ -20,15 +20,28 @@ static char *dirname;
 static char *storyfile;
 
 // Warning levels are set directly by getopt_long through the longopts table
-// Keep usage() updated with new warnings.
+// Keep usage() updated with new warnings; they only appear with --help-all.
 
 int charset_warning_level = WARN_DEFAULT;
 int keyboard_warning_level = WARN_DEFAULT;
 
 int nwarning;
 static int warnings_as_errors;
+static int show_all_help;
 
-void warning(const char *fmt, ...) {
+// Maps each warning kind to the flag that disables it and to its level
+// variable, so warning() can suggest the right --no-warn-* flag -- unless
+// the warning was forced on with --warn-*. Keep in step with warn_id_t.
+
+static const struct {
+	const char *disable;
+	int *level;
+} warn_info[WARN_COUNT] = {
+	{"no-warn-charset",  &charset_warning_level},
+	{"no-warn-keyboard", &keyboard_warning_level}
+};
+
+void warning(warn_id_t id, const char *fmt, ...) {
 	va_list ap;
 
 	fprintf(stderr, "%s ", warnings_as_errors? "Error:" : "Warning:");
@@ -36,6 +49,9 @@ void warning(const char *fmt, ...) {
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);
 	fprintf(stderr, "\n");
+	if(id < WARN_COUNT && *warn_info[id].level != WARN_ALWAYS) {
+		fprintf(stderr, "Use --%s to disable this warning.\n", warn_info[id].disable);
+	}
 	nwarning++;
 }
 
@@ -386,7 +402,7 @@ void rewrite_chunks(chunk_rewriter_t rewriter, int align_writ) {
 	update_crc();
 }
 
-void usage(char *prgname) {
+void usage(char *prgname, int all) {
 	fprintf(stderr, "Aa-machine tools " VERSION "\n");
 	fprintf(stderr, "Copyright 2019-2026 Linus Akesson and the Dialog Project contributors.\n");
 	fprintf(stderr, "\n");
@@ -396,15 +412,19 @@ void usage(char *prgname) {
 	fprintf(stderr, "\n");
 	fprintf(stderr, "--version   -V    Display the program version.\n");
 	fprintf(stderr, "--help      -h    Display this information.\n");
+	fprintf(stderr, "--help-all        Display all options, including warnings.\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "--output    -o    Set output directory/file name.\n");
 	fprintf(stderr, "--target    -t    Select target (web, c64, apple2, web:story).\n");
-	fprintf(stderr, "\n");
-	fprintf(stderr, "--warn-charset          Always warn about codepoints the target cannot render.\n");
-	fprintf(stderr, "--no-warn-charset       Never warn about codepoints the target cannot render.\n");
-	fprintf(stderr, "--warn-keyboard         Always warn about words the target cannot type.\n");
-	fprintf(stderr, "--no-warn-keyboard      Never warn about words the target cannot type.\n");
-	fprintf(stderr, "--warnings-as-errors    Exit with a failure status if anything warned.\n");
+	if(all) {
+		fprintf(stderr, "\n");
+		fprintf(stderr, "Warning options:\n");
+		fprintf(stderr, "--warn-charset          Always warn about codepoints the target cannot render.\n");
+		fprintf(stderr, "--no-warn-charset       Never warn about codepoints the target cannot render.\n");
+		fprintf(stderr, "--warn-keyboard         Always warn about words the target cannot type.\n");
+		fprintf(stderr, "--no-warn-keyboard      Never warn about words the target cannot type.\n");
+		fprintf(stderr, "--warnings-as-errors    Exit with a failure status if anything warned.\n");
+	}
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Targets:\n");
 	fprintf(stderr, "web (default)     Directory with web interpreter.\n");
@@ -417,6 +437,7 @@ void usage(char *prgname) {
 int main(int argc, char **argv) {
 	struct option longopts[] = {
 		{"help", 0, 0, 'h'},
+		{"help-all", 0, &show_all_help, 1},
 		{"version", 0, 0, 'V'},
 		{"output", 1, 0, 'o'},
 		{"target", 1, 0, 't'},
@@ -442,7 +463,7 @@ int main(int argc, char **argv) {
 				break;
 			case '?':
 			case 'h':
-				usage(prgname);
+				usage(prgname, show_all_help);
 				break;
 			case 'V':
 				fprintf(stderr, "Aa-machine tools " VERSION "\n");
@@ -463,7 +484,7 @@ int main(int argc, char **argv) {
 	} while(opt >= 0);
 
 	if(optind >= argc) {
-		usage(prgname);
+		usage(prgname, show_all_help);
 	}
 
 	storyfile = argv[optind];

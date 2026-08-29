@@ -50,7 +50,17 @@ extern int charset_warning_level;
 extern int keyboard_warning_level;
 extern int nwarning;
 
-void warning(const char *fmt, ...);
+/* One entry per warning kind; warn_info[] in aambundle.c maps a
+ * warn_id_t to the flag that disables it and to its level variable. */
+typedef enum {
+	WARN_CHARSET,
+	WARN_KEYBOARD,
+	WARN_COUNT
+} warn_id_t;
+
+/* Print a warning. Unless the warning was forced on with --warn-<kind>,
+ * a hint suggesting its disabling flag is printed after the message. */
+void warning(warn_id_t id, const char *fmt, ...);
 
 /* Warn about codepoints the story declares that the target cannot render */
 void check_charset(const char* target_name, int aaglyph_flags);

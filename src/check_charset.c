@@ -99,6 +99,7 @@ void check_charset(const char* target_name, int need_flags) {
 	}
 
 	warning(
+		WARN_CHARSET,
 		"%d of the story's %d extended characters cannot be rendered "
 		"on %s and will appear as a fallback character:%s%s",
 		nbad, n, target_name, buf,
