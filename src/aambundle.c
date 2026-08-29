@@ -348,6 +348,17 @@ void rewrite_chunks(chunk_rewriter_t rewriter, int align_writ) {
 		action = rewriter
 			? rewriter(head, chunk + 8, size, newid, &newdata, &newsize)
 			: CHUNK_KEEP;
+		if(action == CHUNK_INSERT) {
+			// Emit a new chunk before the current one, then keep
+			// the current chunk as it is. newid/newdata/newsize
+			// hold the inserted chunk; they are copied into the
+			// output buffer by emit_chunk() before we fall through.
+			emit_chunk(newid, newdata, newsize);
+			memcpy(newid, head, 5);
+			newdata = chunk + 8;
+			newsize = size;
+			action = CHUNK_KEEP;
+		}
 		if(action != CHUNK_REPLACE) {
 			memcpy(newid, head, 5);
 			newdata = chunk + 8;

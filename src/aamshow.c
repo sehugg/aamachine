@@ -175,6 +175,144 @@ void decode_look(struct chunk *ch) {
 	}
 }
 
+// USTY: bundler-generated style table for the 6502 engines.
+// Format defined in STYLE_SPEC.md. All multi-byte values big-endian.
+//
+// 0   tag
+// 1   nclass
+// 2   nslot
+// 3   ngeo
+// 4   nxsty
+// 5   xstysize
+// 6   geo offset (word)
+// 8   sty offset (word)
+// 10  xsty offset (word)
+// 12  styidx[nclass]
+
+static void put_style_bits(uint8_t bits) {
+	int first = 1;
+
+	if(bits & AASTYLE_REVERSE) { printf("%sreverse", first? "" : " "); first = 0; }
+	if(bits & AASTYLE_BOLD)    { printf("%sbold", first? "" : " "); first = 0; }
+	if(bits & AASTYLE_ITALIC)  { printf("%sitalic", first? "" : " "); first = 0; }
+	if(bits & AASTYLE_FIXED)   { printf("%sfixed", first? "" : " "); first = 0; }
+	if(first) printf("none");
+}
+
+static const char *float_names[] = {"none", "left", "right"};
+static const char *align_names[] = {"left", "center", "right"};
+
+void decode_usty(struct chunk *ch) {
+	uint8_t *d = ch->data;
+	uint32_t size = ch->size;
+	uint8_t tag, nclass, nslot, ngeo, nxsty, xstysize;
+	uint16_t geooffs, styoffs, xstyoffs;
+	int i, j;
+	uint8_t fg;
+
+	if(size < 12) {
+		printf("Chunk too small (%u bytes) to be a USTY table.\n", size);
+		return;
+	}
+
+	tag = d[0];
+	nclass = d[1];
+	nslot = d[2];
+	ngeo = d[3];
+	nxsty = d[4];
+	xstysize = d[5];
+	geooffs = get16(d + 6);
+	styoffs = get16(d + 8);
+	xstyoffs = get16(d + 10);
+
+	printf("Tag: %02x", tag);
+	switch(tag) {
+	case 0x01: printf(" (c64)"); break;
+	case 0x02: printf(" (apple2)"); break;
+	case 0x03: printf(" (aambox)"); break;
+	}
+	printf("\n");
+	printf("nclass: %d  nslot: %d  ngeo: %d  nxsty: %d  xstysize: %d\n",
+		nclass, nslot, ngeo, nxsty, xstysize);
+	printf("Offsets: geo=%d sty=%d xsty=%d\n", geooffs, styoffs, xstyoffs);
+
+	if(12 + nclass > size) {
+		printf("Warning: styidx table out of bounds.\n");
+		return;
+	}
+	printf("\nClass -> slot:");
+	for(i = 0; i < nclass; i++) {
+		if(!(i % 16)) printf("\n  %04x: ", i);
+		if(d[12 + i] == 0xff) {
+			printf(" --");
+		} else {
+			printf(" %02x", d[12 + i]);
+		}
+	}
+	printf("\n");
+
+	if(geooffs && ngeo) {
+		printf("\ngeo (%d records, 8 bytes each):\n", ngeo);
+		for(i = 0; i < ngeo; i++) {
+			uint8_t *g = d + geooffs + i * 8;
+			uint8_t fl;
+			if(g + 8 > d + size) {
+				printf("  Warning: geo record out of bounds.\n");
+				break;
+			}
+			fl = g[7];
+			printf("  %02x: mtop=%d mbottom=%d padleft=%d width=%d%s height=%d%s float=%s align=%s%s%s\n",
+				i,
+				g[0], g[1], g[2], g[3],
+				(fl & 0x01)? "%" : "",
+				g[4],
+				(fl & 0x02)? "%" : "",
+				(g[5] < 3)? float_names[g[5]] : "?",
+				(g[6] < 3)? align_names[g[6]] : "?",
+				(fl & 0x01)? " relw" : "",
+				(fl & 0x02)? " relh" : "");
+		}
+	}
+
+	if(styoffs && nslot) {
+		printf("\nsty (%d records, 4 bytes each):\n", nslot);
+		for(i = 0; i < nslot; i++) {
+			uint8_t *s = d + styoffs + i * 4;
+			if(s + 4 > d + size) {
+				printf("  Warning: sty record out of bounds.\n");
+				break;
+			}
+			fg = s[2];
+			printf("  %02x: on=", i);
+			put_style_bits(s[0]);
+			printf("  off=");
+			put_style_bits(s[1]);
+			if(fg == 0x80) {
+				printf("  fg=inherit");
+			} else {
+				printf("  fg=%02x", fg);
+			}
+			printf("\n");
+		}
+	}
+
+	if(xstyoffs && nxsty) {
+		printf("\nxsty (%d records, %d bytes each):\n", nxsty, xstysize);
+		for(i = 0; i < nxsty; i++) {
+			if(xstyoffs + (i + 1) * xstysize > size) {
+				printf("  Warning: xsty record out of bounds.\n");
+				break;
+			}
+			printf("  %02x: class=%d", i, d[xstyoffs + i * xstysize]);
+			for(j = 1; j < xstysize; j++) {
+				printf(" %02x", d[xstyoffs + i * xstysize + j]);
+			}
+			printf("\n");
+		}
+	}
+	printf("\n");
+}
+
 static int put_obj(struct chunk *tagsch, int num) {
 	int ptr, count = 0;
 	uint8_t c;
@@ -857,6 +995,7 @@ struct decoder {
 	{decode_head, "HEAD"},
 	{decode_meta, "META"},
 	{decode_look, "LOOK"},
+	{decode_usty, "USTY"},
 	{decode_tags, "TAGS"},
 	{decode_lang, "LANG"},
 	{decode_writ, "WRIT"},

@@ -166,7 +166,8 @@ void bundle_c64(char *dirname) {
 	visit_chunks(storyname, sizeof(storyname), c64_chunk_visitor);
 	check_charset("c64", AAGLYPH_BITMAP);
 	check_keyboard("c64", AAKBD_C64);
-	rewrite_chunks(rewrite_6502, 1);
+	bundle_sty_set_target("c64");
+	rewrite_chunks(rewrite_6502_sty, 1);
 
 	fnsize = strlen(dirname) + strlen(storyname) + 64;
 	filename = malloc(fnsize);
@@ -253,6 +254,20 @@ void bundle_c64(char *dirname) {
 		exit(1);
 	}
 	fwrite(image, 1, sizeof(image), outf);
+	fclose(outf);
+
+	// Also write out the raw story file (the USTY-inserted .aastory that
+	// went into the .d64), so it can be inspected with aamshow or reused.
+	snprintf(filename, fnsize, "%s/c64.usty", dirname);
+	outf = fopen(filename, "wb");
+	if(!outf) {
+		fprintf(stderr, "%s: %s", filename, strerror(errno));
+		exit(1);
+	}
+	if(storysize != fwrite(story, 1, storysize, outf)) {
+		fprintf(stderr, "%s: write error\n", filename);
+		exit(1);
+	}
 	fclose(outf);
 
 	// Add the license

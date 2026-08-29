@@ -27,7 +27,8 @@ uint8_t *find_chunk(const char *id, uint32_t *sizep);
 typedef enum {
 	CHUNK_KEEP,
 	CHUNK_DROP,
-	CHUNK_REPLACE
+	CHUNK_REPLACE,
+	CHUNK_INSERT
 } chunk_action_t;
 
 typedef chunk_action_t (*chunk_rewriter_t)(
@@ -74,6 +75,20 @@ void check_keyboard(const char *target_name, const char *untypeable);
 /* 6502 rewrite chunks helper */
 
 chunk_action_t rewrite_6502(
+	const char *id,
+	uint8_t *data,
+	uint32_t size,
+	char *newid,
+	uint8_t **newdata,
+	uint32_t *newsize);
+
+/* Style precomputation (USTY chunk), implemented in bundle_sty.c. Call
+ * bundle_sty_set_target() before rewrite_chunks() on the 8-bit targets;
+ * "c64", "apple2" or "aambox". rewrite_6502_sty() is rewrite_6502() plus
+ * the USTY chunk inserted right after LOOK. */
+
+void bundle_sty_set_target(const char *target);
+chunk_action_t rewrite_6502_sty(
 	const char *id,
 	uint8_t *data,
 	uint32_t size,
