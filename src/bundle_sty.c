@@ -21,10 +21,15 @@
 // absolute only, fractional units truncated.
 // ============================================================================
 
-#define STY_VERSION	0x01
+#define STY_VERSION	0x02
 #define STY_TAG_AAMBOX  (0x00 | STY_VERSION)
 #define STY_TAG_C64     (0x10 | STY_VERSION)
 #define STY_TAG_APPLE2  (0x20 | STY_VERSION)
+
+// The per-class index tables hold byte offsets rather than slot numbers, so
+// the last record of each array must start below 256.
+#define STY_MAXGEO	32      // (STY_MAXGEO - 1) * 8 < 256
+#define STY_MAXSTY	64      // (STY_MAXSTY - 1) * 4 < 256
 
 #define STY_RELW  0x01
 #define STY_RELH  0x02
@@ -385,27 +390,45 @@ static void parse_decl(styclass *c, const char *p, int len) {
 	// ignored, as an interpreter must per the spec.
 }
 
-// One entry in the dedup key space. The 11 bytes are exactly what an
-// 8-bit engine can act on: the whole sty record, plus the whole geo record.
-// TODO: unify with styclass, or at least check size
-typedef struct {
-	uint8_t rec[11]; // styon styoff fg mtop mbottom padleft width height flo align flags
-} slotkey;
+// Build the two record types, in the exact byte order the 6502 engine
+// indexes them by (see STYLE_SPEC.md).
+
+static void make_geo(uint8_t *g, const styclass *c) {
+	g[0] = c->mtop;
+	g[1] = c->mbottom;
+	g[2] = c->padleft;
+	g[3] = c->width;
+	g[4] = c->height;
+	g[5] = c->flo;
+	g[6] = c->align;
+	g[7] = c->flags;
+}
+
+static void make_sty(uint8_t *s, const styclass *c) {
+	s[0] = c->styon;
+	s[1] = c->styoff;
+	s[2] = c->fg;
+	s[3] = 0;
+}
+
+// Add rec to a record pool unless an identical record is already in it.
+// Returns the slot index, or -1 if the pool is full. Slot 0 of each pool is
+// the pre-seeded all-default record, so a class that sets nothing interns
+// to slot 0 and the engine needs no "no slot" sentinel.
+
+static int intern(uint8_t *pool, int *n, int max, const uint8_t *rec, int recsize) {
+	int i;
+
+	for(i = 0; i < *n; i++) {
+		if(!memcmp(pool + i * recsize, rec, recsize)) return i;
+	}
+	if(*n >= max) return -1;
+	memcpy(pool + *n * recsize, rec, recsize);
+	return (*n)++;
+}
 
 static uint16_t get16(const uint8_t *p) {
 	return (p[0] << 8) | p[1];
-}
-
-static int key_geo(const slotkey *k) {
-	int i;
-	for(i = 3; i < 11; i++) {
-		if(k->rec[i]) return 1;
-	}
-	return 0;
-}
-
-static int key_empty(const slotkey *k) {
-	return !k->rec[0] && !k->rec[1] && k->rec[2] == NOCOLOR && !key_geo(k);
 }
 
 // ----------------------------------------------------------------------------
@@ -425,19 +448,27 @@ static styclass *parse_look(int *nclassp) {
 
 	n = get16(look);
 	if(n > 255) {
-		// TODO: error
-		fprintf(stderr, "Warning: LOOK has %d classes, too many for a USTY table; skipping.\n", n);
+		warning(WARN_STYLE,
+			"Story has %d style classes, more than a USTY table can index "
+			"(limit 255); the interpreter will parse the style sheet at "
+			"startup instead.",
+			n);
 		return 0;
 	}
 	cls = calloc(n, sizeof(styclass));
 	if(!cls) return 0;
 
+	// Colors default to "not set", which is not the same as black. Done up
+	// front so that a truncated LOOK leaves the unparsed tail of the array
+	// looking like classes that set nothing, rather than black-on-black.
 	for(i = 0; i < n; i++) {
-		uint32_t ptr, end;
-
 		cls[i].fg = NOCOLOR;
 		cls[i].bg = NOCOLOR;
 		cls[i].border = NOCOLOR;
+	}
+
+	for(i = 0; i < n; i++) {
+		uint32_t ptr, end;
 
 		if(2 + 2 * i + 2 > looksize) break;
 		ptr = get16(look + 2 + 2 * i);
@@ -455,112 +486,87 @@ static styclass *parse_look(int *nclassp) {
 }
 
 // ----------------------------------------------------------------------------
-// Slot construction: dedupe classes on their 11-byte key, order slots so
-// geometry-bearing ones come first, and collect xsty (body-style) records.
+// Slot construction: dedupe the geo and sty records independently, and
+// collect xsty (body-style) records.
 //
-// A class with an all-default key maps to $ff (no slot): entering it does
-// nothing on an 8-bit machine.
-
-static int keycmp(const slotkey *a, const slotkey *b) {
-	return memcmp(a->rec, b->rec, 11);
-}
+// The two arrays are deduped separately because they are read at different
+// times and dedupe very differently: geo keys are nearly all distinct
+// (margins and text-align make them unique), while sty keys collapse hard
+// (forensic: 37 classes, 14 geo records, 9 sty records). A joint slot made
+// the sty array carry a duplicate for every distinct geometry.
+//
+// The per-class index tables hold *byte offsets* (slot * 8 for geo, slot * 4
+// for sty), not slot numbers, so the engine indexes a record with no shift
+// chain at all -- which is what the geo/sty record sizes were padded for in
+// the first place. That caps the arrays at 32 geo and 64 sty records; the
+// largest real story measured uses 14 and 9.
+//
+// Slot 0 of each array is the reserved all-default record, so a class that
+// sets nothing is an ordinary slot rather than a sentinel: the engine
+// applies a no-op record instead of branching around one.
 
 static uint8_t *build_usty(uint32_t *sizep) {
 	styclass *cls;
 	int nclass;
-	slotkey geo[256], plain[256];
-	int ngeo = 0, nplain = 0, nslot;
-	uint8_t styidx[256];
-	uint8_t pool[256];      // 0 = none, 1 = geo, 2 = plain
-	uint8_t poolidx[256];
+	uint8_t geo[STY_MAXGEO * 8], sty[STY_MAXSTY * 4];
+	int ngeo = 1, nsty = 1;         // slot 0 of each is the default record
+	uint8_t geoidx[256], styidx[256];
 	uint8_t xsty[256 * 4];
 	int nxsty = 0;
 	uint8_t *out;
-	uint32_t size;
-	int i, s;
+	uint32_t size, styoffs, geooffs, xstyoffs;
+	int i;
 
 	cls = parse_look(&nclass);
 	if(!cls) return 0;
 
+	memset(geo, 0, 8);
+	sty[0] = 0;
+	sty[1] = 0;
+	sty[2] = NOCOLOR;
+	sty[3] = 0;
+
 	for(i = 0; i < nclass; i++) {
-		slotkey k;
-		int j;
+		uint8_t g[8], s[4];
+		int gs, ss;
 
-		k.rec[0] = cls[i].styon;
-		k.rec[1] = cls[i].styoff;
-		k.rec[2] = cls[i].fg;
-		k.rec[3] = cls[i].mtop;
-		k.rec[4] = cls[i].mbottom;
-		k.rec[5] = cls[i].padleft;
-		k.rec[6] = cls[i].width;
-		k.rec[7] = cls[i].height;
-		k.rec[8] = cls[i].flo;
-		k.rec[9] = cls[i].align;
-		k.rec[10] = cls[i].flags;
-
-		if(key_empty(&k)) {
-			pool[i] = 0;
-		} else if(key_geo(&k)) {
-			for(j = 0; j < ngeo; j++) {
-				if(!keycmp(&geo[j], &k)) break;
-			}
-			if(j < ngeo) {
-				pool[i] = 1;
-				poolidx[i] = j;
-			} else {
-				geo[ngeo] = k;
-				pool[i] = 1;
-				poolidx[i] = ngeo++;
-			}
-		} else {
-			for(j = 0; j < nplain; j++) {
-				if(!keycmp(&plain[j], &k)) break;
-			}
-			if(j < nplain) {
-				pool[i] = 2;
-				poolidx[i] = j;
-			} else {
-				plain[nplain] = k;
-				pool[i] = 2;
-				poolidx[i] = nplain++;
-			}
+		make_geo(g, &cls[i]);
+		make_sty(s, &cls[i]);
+		gs = intern(geo, &ngeo, STY_MAXGEO, g, 8);
+		ss = intern(sty, &nsty, STY_MAXSTY, s, 4);
+		if(gs < 0 || ss < 0) {
+			warning(WARN_STYLE,
+				"Story has more distinct %s styles than a USTY table can hold "
+				"(limit %d); the interpreter will parse the style sheet at "
+				"startup instead.",
+				(gs < 0)? "layout" : "text",
+				(gs < 0)? STY_MAXGEO - 1 : STY_MAXSTY - 1);
+			free(cls);
+			return 0;
 		}
+		geoidx[i] = gs * 8;
+		styidx[i] = ss * 4;
 
 		// Body-style (xsty) candidates: classes that set a background or
 		// border color. Keyed on the raw class index so two body classes
 		// differing only in background cannot be deduped onto one slot.
 		if(sty_target->have_color && (cls[i].bg != NOCOLOR || cls[i].border != NOCOLOR)) {
 			uint8_t *x = xsty + nxsty * sty_target->xstysize;
+			memset(x, 0, sty_target->xstysize);
 			x[0] = i;
 			if(sty_target->xstysize > 1) x[1] = cls[i].bg;
 			if(sty_target->xstysize > 2) x[2] = cls[i].border;
-			if(sty_target->xstysize > 3) x[3] = 0;
-			// TODO: memset(0)?
 			nxsty++;
 		}
 	}
 
-	nslot = ngeo + nplain;
-	if(nslot > 255 || nxsty > 255) {
-		// TODO: error
-		fprintf(stderr, "Warning: USTY table too large (nslot %d, nxsty %d); skipping.\n", nslot, nxsty);
-		free(cls);
-		return 0;
-	}
-
-	// Final slot numbering: geo slots first, then plain slots.
-	for(i = 0; i < nclass; i++) {
-		if(pool[i] == 0) {
-			styidx[i] = 0xff;
-		} else if(pool[i] == 1) {
-			styidx[i] = poolidx[i];
-		} else {
-			styidx[i] = ngeo + poolidx[i];
-		}
-	}
-
-	// Chunk layout. Offsets are from the start of the payload; 0 = absent.
-	size = 12 + nclass + ngeo * 8 + nslot * 4 + nxsty * sty_target->xstysize;
+	// Chunk layout: a fixed header, then the two index tables, then the
+	// hot sty records, then the cold geo and xsty records. Every array
+	// offset follows from the counts, so the header carries no offsets.
+	styoffs = 6 + 2 * nclass;
+	geooffs = styoffs + nsty * 4;
+	xstyoffs = geooffs + ngeo * 8;
+	size = xstyoffs + nxsty * sty_target->xstysize;
 	out = malloc(size);
 	if(!out) {
 		fprintf(stderr, "Out of memory.\n");
@@ -569,38 +575,15 @@ static uint8_t *build_usty(uint32_t *sizep) {
 
 	out[0] = sty_target->tag;
 	out[1] = nclass;
-	out[2] = nslot;
-	out[3] = ngeo;
+	out[2] = ngeo;
+	out[3] = nsty;
 	out[4] = nxsty;
 	out[5] = sty_target->xstysize;
-	out[6] = ngeo? (12 + nclass) >> 8 : 0;
-	out[7] = ngeo? (12 + nclass) & 0xff : 0;
-	out[8] = nslot? (12 + nclass + ngeo * 8) >> 8 : 0;
-	out[9] = nslot? (12 + nclass + ngeo * 8) & 0xff : 0;
-	out[10] = nxsty? (12 + nclass + ngeo * 8 + nslot * 4) >> 8 : 0;
-	out[11] = nxsty? (12 + nclass + ngeo * 8 + nslot * 4) & 0xff : 0;
-	memcpy(out + 12, styidx, nclass);
-
-	for(s = 0; s < ngeo; s++) {
-		uint8_t *g = out + 12 + nclass + s * 8;
-		g[0] = geo[s].rec[3];
-		g[1] = geo[s].rec[4];
-		g[2] = geo[s].rec[5];
-		g[3] = geo[s].rec[6];
-		g[4] = geo[s].rec[7];
-		g[5] = geo[s].rec[8];
-		g[6] = geo[s].rec[9];
-		g[7] = geo[s].rec[10];
-	}
-	for(s = 0; s < nslot; s++) {
-		const slotkey *k = s < ngeo? &geo[s] : &plain[s - ngeo];
-		uint8_t *st = out + 12 + nclass + ngeo * 8 + s * 4;
-		st[0] = k->rec[0];
-		st[1] = k->rec[1];
-		st[2] = k->rec[2];
-		st[3] = 0;
-	}
-	memcpy(out + 12 + nclass + ngeo * 8 + nslot * 4, xsty, nxsty * sty_target->xstysize);
+	memcpy(out + 6, geoidx, nclass);
+	memcpy(out + 6 + nclass, styidx, nclass);
+	memcpy(out + styoffs, sty, nsty * 4);
+	memcpy(out + geooffs, geo, ngeo * 8);
+	memcpy(out + xstyoffs, xsty, nxsty * sty_target->xstysize);
 
 	free(cls);
 	*sizep = size;

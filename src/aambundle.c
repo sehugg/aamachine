@@ -24,6 +24,7 @@ static char *storyfile;
 
 int charset_warning_level = WARN_DEFAULT;
 int keyboard_warning_level = WARN_DEFAULT;
+int style_warning_level = WARN_DEFAULT;
 
 int nwarning;
 static int warnings_as_errors;
@@ -38,7 +39,8 @@ static const struct {
 	int *level;
 } warn_info[WARN_COUNT] = {
 	{"no-warn-charset",  &charset_warning_level},
-	{"no-warn-keyboard", &keyboard_warning_level}
+	{"no-warn-keyboard", &keyboard_warning_level},
+	{"no-warn-style",    &style_warning_level}
 };
 
 void warning(warn_id_t id, const char *fmt, ...) {
@@ -434,6 +436,8 @@ void usage(char *prgname, int all) {
 		fprintf(stderr, "--no-warn-charset       Never warn about codepoints the target cannot render.\n");
 		fprintf(stderr, "--warn-keyboard         Always warn about words the target cannot type.\n");
 		fprintf(stderr, "--no-warn-keyboard      Never warn about words the target cannot type.\n");
+		fprintf(stderr, "--warn-style            Always warn about styles the target cannot precompute.\n");
+		fprintf(stderr, "--no-warn-style         Never warn about styles the target cannot precompute.\n");
 		fprintf(stderr, "--warnings-as-errors    Exit with a failure status if anything warned.\n");
 	}
 	fprintf(stderr, "\n");
@@ -456,6 +460,8 @@ int main(int argc, char **argv) {
 		{"no-warn-charset", 0, &charset_warning_level, WARN_NEVER},
 		{"warn-keyboard", 0, &keyboard_warning_level, WARN_ALWAYS},
 		{"no-warn-keyboard", 0, &keyboard_warning_level, WARN_NEVER},
+		{"warn-style", 0, &style_warning_level, WARN_ALWAYS},
+		{"no-warn-style", 0, &style_warning_level, WARN_NEVER},
 		{"warnings-as-errors", 0, &warnings_as_errors, 1},
 		{0, 0, 0, 0}
 	};
