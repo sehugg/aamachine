@@ -193,8 +193,9 @@ void decode_look(struct chunk *ch) {
 // The xsty record shape follows from the tag's target nibble.
 //
 // Keep in step with STY_VERSION in bundle_sty.c.
+// TODO: put constants in shared header file
 
-#define USTY_VERSION	4
+#define USTY_VERSION	5
 #define USTY_XSTY_SIZE	5
 
 static void put_style_bits(uint8_t bits) {
@@ -1111,7 +1112,7 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Error: First chunk must be HEAD.\n");
 		exit(1);
 	}
-	
+
 	aavm_init(chunk[0].data[0]); // Wait until after reading the file before initializing the opcode database so that we can pass the major version
 
 	if(chunk[0].data[0] > AAVM_FORMAT_MAJOR || (chunk[0].data[0] == 1 && chunk[0].data[1] > AAVM_FORMAT_MINOR)) {

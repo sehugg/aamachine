@@ -21,7 +21,7 @@
 // absolute only, fractional units truncated.
 // ============================================================================
 
-#define STY_VERSION	0x04
+#define STY_VERSION	0x05
 #define STY_TAG_AAMBOX  (0x00 | STY_VERSION)
 #define STY_TAG_C64     (0x10 | STY_VERSION)
 #define STY_TAG_APPLE2  (0x20 | STY_VERSION)
@@ -73,18 +73,33 @@ struct sty_target {
 	const char *name;
 	uint8_t tag;
 	int have_color;         // per-character fg color (c64)
+	uint8_t stymask;        // AASTYLE_* bits the frontend can actually act on
 	const uint8_t *bodydef; // BODY_N defaults, or null if the target has
 	                        // no body records at all
 };
 
+// stymask is what the target's io_mstyle looks at, and nothing else reads
+// rstyle. Bits outside it cannot change a single pixel, so masking them out
+// before interning collapses records that differ only in styles the target
+// cannot render. AASTYLE_FIXED is in no mask: every 8-bit target is
+// monospace already, and no frontend tests bit 3.
+//
+//   c64     io_mstyle: lsr / and #3 -> bold | italic (c64_frontend.s:508).
+//           Reverse is masked in even though the c64 does not draw it yet,
+//           because the body record already carries a reverse color for it.
+//   apple2  mstyle_enter: lsr, carry -> set_inverse (a2_frontend.s:1394).
+//           Reverse and nothing else.
+//   aambox  io_mstyle is a bare rts (aambox_frontend.s:221). Nothing.
+
 static const struct sty_target sty_aambox = {
-	"aambox", STY_TAG_AAMBOX, 0, 0
+	"aambox", STY_TAG_AAMBOX, 0, 0, 0
 };
 static const struct sty_target sty_c64 = {
-	"c64", STY_TAG_C64, 1, c64_bodydef
+	"c64", STY_TAG_C64, 1,
+	AASTYLE_REVERSE | AASTYLE_BOLD | AASTYLE_ITALIC, c64_bodydef
 };
 static const struct sty_target sty_apple2 = {
-	"apple2", STY_TAG_APPLE2, 0, 0
+	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0
 };
 
 static const struct sty_target *sty_target;
@@ -459,8 +474,8 @@ static void make_geo(uint8_t *g, const styclass *c) {
 }
 
 static void make_sty(uint8_t *s, const styclass *c) {
-	s[0] = c->styon;
-	s[1] = c->styoff;
+	s[0] = c->styon & sty_target->stymask;
+	s[1] = c->styoff & sty_target->stymask;
 	s[2] = c->fg;
 	s[3] = 0;
 }
