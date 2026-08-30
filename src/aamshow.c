@@ -204,8 +204,8 @@ static void put_style_bits(uint8_t bits) {
 	if(first) printf("none");
 }
 
-static const char *float_names[] = {"none", "left", "right"};
-static const char *align_names[] = {"left", "center", "right"};
+static const char *float_names[] = {"none", "left", "right", "center"};
+static const char *align_names[] = {"none", "left", "right", "center"};
 
 void decode_usty(struct chunk *ch) {
 	uint8_t *d = ch->data;
@@ -336,8 +336,8 @@ void decode_usty(struct chunk *ch) {
 			(fl & 0x01)? "%" : "",
 			g[4],
 			(fl & 0x02)? "%" : "",
-			(g[5] < 3)? float_names[g[5]] : "?",
-			(g[6] < 3)? align_names[g[6]] : "?");
+			(g[5] <= 3)? float_names[g[5]] : "?",
+			(g[6] <= 3)? align_names[g[6]] : "?");
 	}
 
 	if(nxsty) {

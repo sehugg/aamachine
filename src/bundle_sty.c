@@ -95,7 +95,7 @@ static const uint8_t c64_bodydef[BODY_N] = {
 struct sty_target {
 	const char *name;
 	uint8_t tag;
-	int have_color;         // per-character fg color (c64)
+	int have_vic_color;     // per-character fg color (c64)
 	uint8_t stymask;        // AASTYLE_* bits the frontend can actually act on
 	const uint8_t *bodydef; // BODY_N defaults, or null if the target has
 	                        // no body records at all
@@ -142,8 +142,8 @@ typedef struct {
 	uint8_t fg;             // c64 palette index, NOCOLOR = inherit
 	uint8_t mtop, mbottom, padleft;
 	uint8_t width, height;
-	uint8_t flo;            // 0 none, 1 left, 2 right
-	uint8_t align;          // 0 left, 1 center, 2 right
+	uint8_t flo;            // 0 none, 1 left, 2 right, 3 center
+	uint8_t align;          // 1 left, 2 right, 3 center
 	uint8_t flags;          // STY_RELW | STY_RELH
 	uint8_t body[BODY_N];   // xsty fields, only valid if hasbody
 	uint8_t hasbody;        // class declared at least one body color
@@ -225,9 +225,11 @@ static int hex(char c) {
 	return c >= '0' && c <= '9'? c - '0' : (c | 0x20) - 'a' + 10;
 }
 
-// Parse "  #rgb", "#rrggbb", "rgb(r,g,b)", "rgba(r,g,b,a)" or a name.
-// Returns 1 and sets *out to a palette index; 0 if the value is not a
-// usable color (inherit, initial, transparent, alpha 0, garbage).
+// Parse "  #rgb", "#rrggbb", "rgb(r,g,b)", "rgba(r,g,b,a)", a name,
+//   or a specific VIC-II color index (0..15).
+// Returns 1 and sets *out to a palette index;
+// returns 0 if the value is not a usable color
+//   (inherit, initial, transparent, alpha 0, garbage).
 static int parse_color(const char *v, int *out) {
 	int i, r = 0, g = 0, b = 0, alpha = 255, n;
 
@@ -270,6 +272,20 @@ static int parse_color(const char *v, int *out) {
 		} else {
 			if(sscanf(v, "%d , %d , %d", &r, &g, &b) != 3) return 0;
 		}
+	} else if(*v >= '0' && *v <= '9') {
+		// Naked VIC color index: 0..15 selects the palette entry itself,
+		// so 3 is cyan no matter what hue CSS would call it. Reject
+		// trailing junk so "10px" and friends don't quietly become 10.
+		const char* v_old = v;
+		n = atoi(v);
+		while(*v >= '0' && *v <= '9') v++;
+		while(*v == ' ' || *v == '\t') v++;
+		if(!*v && n <= 15) {
+			*out = n;
+			return 1;
+		}
+		warning(WARN_STYLE, "Invalid VIC color index \"%s\", must be in range 0..15.", v_old);
+		return 0;
 	} else {
 		int vic = -1;
 		for(i = 0; i < (int)(sizeof(css2vic) / sizeof(css2vic[0])); i++) {
@@ -279,7 +295,7 @@ static int parse_color(const char *v, int *out) {
 			}
 		}
 		if(vic < 0) {
-			warning(WARN_STYLE, "Unknown color \"%s\".", v);
+			warning(WARN_STYLE, "Unknown c64 color \"%s\".", v);
 			return 0;
 		}
 		*out = vic;
@@ -422,9 +438,12 @@ static void parse_decl(styclass *c, const char *p, int len) {
 	} else if(!strcmp(key, "float")) {
 		if(matchval(value, "left")) c->flo = 1;
 		else if(matchval(value, "right")) c->flo = 2;
+	} else if(!strcmp(key, "margin")) {
+		if(matchval(value, "auto")) c->flo = 3;
 	} else if(!strcmp(key, "text-align")) {
-		if(matchval(value, "center")) c->align = 1;
+		if(matchval(value, "center")) c->align = 3;
 		else if(matchval(value, "right")) c->align = 2;
+		else if(matchval(value, "left")) c->align = 1;
 	} else if(!strcmp(key, "font-style")) {
 		if(matchval(value, "italic") || matchval(value, "oblique")) c->styon |= AASTYLE_ITALIC;
 		else if(matchval(value, "normal")) c->styoff |= AASTYLE_ITALIC;
@@ -437,7 +456,7 @@ static void parse_decl(styclass *c, const char *p, int len) {
 	} else if(!strcmp(key, "text-decoration") || !strcmp(key, "reverse-video")) {
 		if(strstr(value, "reverse")) c->styon |= AASTYLE_REVERSE;
 		else if(!matchval(value, "inherit")) c->styoff |= AASTYLE_REVERSE;
-	} else if(sty_target->have_color && !strcmp(key, "color")) {
+	} else if(sty_target->have_vic_color && !strcmp(key, "color")) {
 		int ci;
 		if(parse_color(value, &ci)) c->fg = ci;
 	}
