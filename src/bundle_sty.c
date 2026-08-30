@@ -21,22 +21,31 @@
 // absolute only, fractional units truncated.
 // ============================================================================
 
-#define STY_VERSION	0x06
+#define STY_VERSION	USTY_VERSION
 #define STY_TAG_AAMBOX  (0x00 | STY_VERSION)
 #define STY_TAG_C64     (0x10 | STY_VERSION)
 #define STY_TAG_APPLE2  (0x20 | STY_VERSION)
 
-// The per-class index tables hold byte offsets rather than slot numbers, so
-// the last record of each array must start below 256.
-#define STY_MAXGEO	32      // (STY_MAXGEO - 1) * 8 < 256
-#define STY_MAXSTY	64      // (STY_MAXSTY - 1) * 4 < 256
+// The per-class index tables hold slot numbers, 1-based: slot 0 is the
+// "all defaults" sentinel and has no stored record, so the counts below are
+// counts of real records and the index byte is the only limit.
+#define STY_MAXGEO	255
+#define STY_MAXSTY	255
 
 #define STY_RELW  0x01
 #define STY_RELH  0x02
 
 #define NOCOLOR   0x80    // "$80 = not set" sentinel for the sty fg field
 
-#define XSTY_SIZE 6       // bytes per xsty record, incl. the class index
+// Bytes per xsty record for the c64: class index, background|border, and
+// four palette bytes. This is a *per-target* size -- it is what the c64's
+// body record happens to need, not a property of the format -- so it lives
+// in struct sty_target and travels in the chunk header. A target whose
+// frontend has a different palette shape declares its own; one with no body
+// records at all declares 0.
+#define XSTY_SIZE_C64 6
+
+#define STY_HDRSIZE USTY_HDRSIZE
 
 // A body record's six colors, in xsty nibble order. Only declarations that
 // name the target explicitly (-iftf-c64-background-color and friends) fill
@@ -90,6 +99,12 @@ struct sty_target {
 	uint8_t stymask;        // AASTYLE_* bits the frontend can actually act on
 	const uint8_t *bodydef; // BODY_N defaults, or null if the target has
 	                        // no body records at all
+	uint8_t xstysize;       // bytes per body record; 0 if bodydef is null.
+	                        // Emitted in the header, so a decoder can stride
+	                        // the array without knowing the target. Note that
+	                        // the *packing* below is c64-shaped: a target with
+	                        // a different palette needs its own packer, not
+	                        // just a different size here.
 };
 
 // stymask is what the target's io_mstyle looks at, and nothing else reads
@@ -106,14 +121,14 @@ struct sty_target {
 //   aambox  io_mstyle is a bare rts (aambox_frontend.s:221). Nothing.
 
 static const struct sty_target sty_aambox = {
-	"aambox", STY_TAG_AAMBOX, 0, 0, 0
+	"aambox", STY_TAG_AAMBOX, 0, 0, 0, 0
 };
 static const struct sty_target sty_c64 = {
 	"c64", STY_TAG_C64, 1,
-	AASTYLE_REVERSE | AASTYLE_BOLD | AASTYLE_ITALIC, c64_bodydef
+	AASTYLE_REVERSE | AASTYLE_BOLD | AASTYLE_ITALIC, c64_bodydef, XSTY_SIZE_C64
 };
 static const struct sty_target sty_apple2 = {
-	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0
+	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0, 0
 };
 
 static const struct sty_target *sty_target;
@@ -475,6 +490,11 @@ static uint16_t get16(const uint8_t *p) {
 	return (p[0] << 8) | p[1];
 }
 
+static void put16(uint8_t *p, uint32_t v) {
+	p[0] = (v >> 8) & 0xff;
+	p[1] = v & 0xff;
+}
+
 // ----------------------------------------------------------------------------
 // LOOK parse: read the class count, then walk each class's declaration
 // block (null-terminated strings, a lone null byte ends the block), the
@@ -537,15 +557,22 @@ static styclass *parse_look(int *nclassp) {
 // (forensic: 37 classes, 14 geo records, 9 sty records). A joint slot made
 // the sty array carry a duplicate for every distinct geometry.
 //
-// The per-class index tables hold *byte offsets* (slot * 8 for geo, slot * 4
-// for sty), not slot numbers, so the engine indexes a record with no shift
-// chain at all -- which is what the geo/sty record sizes were padded for in
-// the first place. That caps the arrays at 32 geo and 64 sty records; the
-// largest real story measured uses 14 and 9.
+// The per-class index tables hold 1-based slot numbers. Slot 0 is the
+// "all defaults" sentinel and is stored in neither array, so a class that
+// sets nothing costs no record: the engine sees 0 and branches straight to
+// the path it already takes for a default record, skipping both the
+// slot * recsize computation and the record read.
 //
-// Slot 0 of each array is the reserved all-default record, so a class that
-// sets nothing is an ordinary slot rather than a sentinel: the engine
-// applies a no-op record instead of branching around one.
+// Slot numbers rather than byte offsets because the offsets capped the
+// arrays at 32 geo and 64 sty records, and while no story measured so far
+// comes near that, none of them styles for the c64 either -- nsty is small
+// today mostly because the fg field is unused. A masked c64 sty record is
+// styon(8) x styoff(8) x fg(17), so a story that actually writes c64 styles
+// can pass 64 without being exotic. The cost is a slot * recsize shift
+// chain at each read site, which the sentinel skips for the common case.
+//
+// The records stay padded to 8 and 4 bytes even though the offsets that
+// motivated the padding are gone: the shift chain wants a power of two.
 //
 // xsty holds body records, the one thing that genuinely cannot live in a
 // slot: SET_BODY rewrites the frontend's whole style palette plus the
@@ -563,23 +590,24 @@ static styclass *parse_look(int *nclassp) {
 static uint8_t *build_usty(uint32_t *sizep) {
 	styclass *cls;
 	int nclass;
-	uint8_t geo[STY_MAXGEO * 8], sty[STY_MAXSTY * 4];
-	int ngeo = 1, nsty = 1;         // slot 0 of each is the default record
+	uint8_t geo[STY_MAXGEO * USTY_GEO_SIZE], sty[STY_MAXSTY * USTY_STY_SIZE];
+	int ngeo = 0, nsty = 0;         // real records; slot 0 is the sentinel
 	uint8_t geoidx[256], styidx[256];
-	uint8_t xsty[256 * XSTY_SIZE];
+	uint8_t xsty[256 * USTY_XSTY_MAXSIZE];
 	int nxsty = 0;
 	uint8_t *out;
-	uint32_t size, styoffs, geooffs, xstyoffs;
+	uint32_t size, geoidxoffs, styidxoffs, styoffs, geooffs, xstyoffs;
 	int i;
+
+	// The sentinel records. A class matching one of these interns to slot
+	// 0, which is stored in neither array: the engine branches straight to
+	// the path it already takes for an all-default record, skipping both
+	// the slot * recsize computation and the record read.
+	static const uint8_t geodflt[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+	static const uint8_t stydflt[4] = {0, 0, NOCOLOR, 0};
 
 	cls = parse_look(&nclass);
 	if(!cls) return 0;
-
-	memset(geo, 0, 8);
-	sty[0] = 0;
-	sty[1] = 0;
-	sty[2] = NOCOLOR;
-	sty[3] = 0;
 
 	for(i = 0; i < nclass; i++) {
 		uint8_t g[8], s[4];
@@ -587,27 +615,31 @@ static uint8_t *build_usty(uint32_t *sizep) {
 
 		make_geo(g, &cls[i]);
 		make_sty(s, &cls[i]);
-		gs = intern(geo, &ngeo, STY_MAXGEO, g, 8);
-		ss = intern(sty, &nsty, STY_MAXSTY, s, 4);
-		if(gs < 0 || ss < 0) {
+
+		// Slots are 1-based so that 0 can be the sentinel; the record for
+		// slot n lives at (n - 1) * recsize, which the engine reaches by
+		// biasing its base pointer down one record.
+		gs = memcmp(g, geodflt, 8)? intern(geo, &ngeo, STY_MAXGEO, g, 8) : -2;
+		ss = memcmp(s, stydflt, 4)? intern(sty, &nsty, STY_MAXSTY, s, 4) : -2;
+		if(gs == -1 || ss == -1) {
 			warning(WARN_STYLE,
 				"Story has more distinct %s styles than a USTY table can hold "
 				"(limit %d); the interpreter will parse the style sheet at "
 				"startup instead.",
-				(gs < 0)? "layout" : "text",
-				(gs < 0)? STY_MAXGEO - 1 : STY_MAXSTY - 1);
+				(gs == -1)? "layout" : "text",
+				(gs == -1)? STY_MAXGEO : STY_MAXSTY);
 			free(cls);
 			return 0;
 		}
-		geoidx[i] = gs * 8;
-		styidx[i] = ss * 4;
+		geoidx[i] = (gs == -2)? 0 : gs + 1;     // -2 = default -> slot 0
+		styidx[i] = (ss == -2)? 0 : ss + 1;
 
 		// Body records, keyed on the raw class index because SET_BODY
 		// takes a class operand and this data is deliberately outside the
 		// slot dedup key. Two nibbles per byte; all six fields are always
 		// present, the undeclared ones resolved to the target's defaults.
 		if(cls[i].hasbody) {
-			uint8_t *x = xsty + nxsty * XSTY_SIZE;
+			uint8_t *x = xsty + nxsty * sty_target->xstysize;
 			x[0] = i;
 			x[1] = cls[i].body[BODY_BG] | (cls[i].body[BODY_BORDER] << 4);
 			for(j = 0; j < 4; j++) {
@@ -618,13 +650,32 @@ static uint8_t *build_usty(uint32_t *sizep) {
 		}
 	}
 
-	// Chunk layout: a fixed header, then the two index tables, then the
-	// hot sty records, then the cold geo and xsty records. Every array
-	// offset follows from the counts, so the header carries no offsets.
-	styoffs = 5 + 2 * nclass;
-	geooffs = styoffs + nsty * 4;
-	xstyoffs = geooffs + ngeo * 8;
-	size = xstyoffs + nxsty * XSTY_SIZE;
+	// Chunk layout: a fixed header, then the arrays in descending order of
+	// how often the engine reads them.
+	//
+	//   styidx, sty   read on every span enter/leave, via unstyle folding
+	//                 the whole div stack (engine.s:532)
+	//   geoidx, geo   read at div enter/leave only
+	//   xsty          read at SET_BODY only, and is empty in every story
+	//                 measured so far
+	//
+	// geoidx is cold -- it is the class -> slot table for geo, not for sty --
+	// so it belongs after the hot pair rather than ahead of it. That puts
+	// styidx at the fixed header offset, so the hottest pointer is
+	// base + STY_HDRSIZE with no header read at all.
+	//
+	// The header states the four remaining array offsets outright. They are
+	// derivable from the counts, but stating them decouples the layout from
+	// the record sizes and names the copy boundaries: an engine can copy
+	// [0, geoidx_offset) to keep only the hot pair in the heap, or
+	// [0, geo_offset) to keep every index table resident and read the bulky
+	// geo array from the story file through readdata.
+	styidxoffs = STY_HDRSIZE;
+	styoffs = styidxoffs + nclass;
+	geoidxoffs = styoffs + nsty * USTY_STY_SIZE;
+	geooffs = geoidxoffs + nclass;
+	xstyoffs = geooffs + ngeo * USTY_GEO_SIZE;
+	size = xstyoffs + nxsty * sty_target->xstysize;
 	out = malloc(size);
 	if(!out) {
 		fprintf(stderr, "Out of memory.\n");
@@ -636,11 +687,16 @@ static uint8_t *build_usty(uint32_t *sizep) {
 	out[2] = ngeo;
 	out[3] = nsty;
 	out[4] = nxsty;
-	memcpy(out + 5, geoidx, nclass);
-	memcpy(out + 5 + nclass, styidx, nclass);
-	memcpy(out + styoffs, sty, nsty * 4);
-	memcpy(out + geooffs, geo, ngeo * 8);
-	memcpy(out + xstyoffs, xsty, nxsty * XSTY_SIZE);
+	out[5] = sty_target->xstysize;  // per-target body record stride
+	put16(out + 6, styoffs);
+	put16(out + 8, geoidxoffs);
+	put16(out + 10, geooffs);
+	put16(out + 12, xstyoffs);
+	memcpy(out + styidxoffs, styidx, nclass);
+	memcpy(out + styoffs, sty, nsty * USTY_STY_SIZE);
+	memcpy(out + geoidxoffs, geoidx, nclass);
+	memcpy(out + geooffs, geo, ngeo * USTY_GEO_SIZE);
+	memcpy(out + xstyoffs, xsty, nxsty * sty_target->xstysize);
 
 	free(cls);
 	*sizep = size;

@@ -193,10 +193,6 @@ void decode_look(struct chunk *ch) {
 // The xsty record shape follows from the tag's target nibble.
 //
 // Keep in step with STY_VERSION in bundle_sty.c.
-// TODO: put constants in shared header file
-
-#define USTY_VERSION	6
-#define USTY_XSTY_SIZE	6
 
 static void put_style_bits(uint8_t bits) {
 	int first = 1;
@@ -214,7 +210,7 @@ static const char *align_names[] = {"left", "center", "right"};
 void decode_usty(struct chunk *ch) {
 	uint8_t *d = ch->data;
 	uint32_t size = ch->size;
-	uint8_t tag, nclass, ngeo, nsty, nxsty;
+	uint8_t tag, nclass, ngeo, nsty, nxsty, xstysize;
 	uint32_t geoidxoffs, styidxoffs, styoffs, geooffs, xstyoffs;
 	int i;
 	uint8_t fg;
@@ -229,12 +225,7 @@ void decode_usty(struct chunk *ch) {
 	ngeo = d[2];
 	nsty = d[3];
 	nxsty = d[4];
-
-	geoidxoffs = 5;
-	styidxoffs = geoidxoffs + nclass;
-	styoffs = styidxoffs + nclass;
-	geooffs = styoffs + nsty * 4;
-	xstyoffs = geooffs + ngeo * 8;
+	xstysize = d[5];
 
 	printf("Tag: %02x (", tag);
 	switch(tag & 0xf0) {
@@ -245,7 +236,7 @@ void decode_usty(struct chunk *ch) {
 	}
 	printf(", format version %d)\n", tag & 0x0f);
 
-	// The layout below is revision 2's. An older or newer table has a
+	// The layout below is revision 8's. An older or newer table has a
 	// different header, so say so rather than misparsing it into a bounds
 	// complaint -- this is the mismatch the tag byte exists to catch.
 	if((tag & 0x0f) != USTY_VERSION) {
@@ -254,31 +245,75 @@ void decode_usty(struct chunk *ch) {
 		return;
 	}
 
-	printf("nclass: %d  ngeo: %d  nsty: %d  nxsty: %d\n",
-		nclass, ngeo, nsty, nxsty);
+	if(size < USTY_HDRSIZE) {
+		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
+		return;
+	}
 
-	if(xstyoffs + nxsty * USTY_XSTY_SIZE > size) {
+	// styidx, the hottest array, always follows the fixed header; the other
+	// four bases are stated by the header so an engine can copy just a hot
+	// prefix and read the rest from the story file. Cross-check them
+	// against the counts: a stale offset disagreeing with a count is
+	// exactly the inconsistency worth reporting here.
+	styidxoffs = USTY_HDRSIZE;
+	styoffs = get16(d + 6);
+	geoidxoffs = get16(d + 8);
+	geooffs = get16(d + 10);
+	xstyoffs = get16(d + 12);
+
+	printf("nclass: %d  ngeo: %d  nsty: %d  nxsty: %d",
+		nclass, ngeo, nsty, nxsty);
+	if(nxsty) {
+		printf(" (%d bytes each)", xstysize);
+	} else if(!xstysize) {
+		printf(" (target has no body records)");
+	}
+	printf("\n");
+	printf("Offsets: styidx %u  sty %u  geoidx %u  geo %u  xsty %u\n",
+		styidxoffs, styoffs, geoidxoffs, geooffs, xstyoffs);
+
+	if(styoffs != styidxoffs + nclass
+	|| geoidxoffs != styoffs + nsty * USTY_STY_SIZE
+	|| geooffs != geoidxoffs + nclass
+	|| xstyoffs != geooffs + ngeo * USTY_GEO_SIZE) {
+		printf("Warning: header offsets disagree with the record counts.\n");
+		return;
+	}
+
+	// The xsty record size is per-target, so it is read from the header
+	// rather than assumed: the c64's body record is 6 bytes, a target with
+	// no body records declares 0, and another 6502 platform could want a
+	// different palette shape. geo and sty sizes are format-wide by
+	// contrast -- they are reached by slot * recsize, so the interpreter
+	// has to know them at assembly time.
+	if(nxsty && !xstysize) {
+		printf("Warning: %d body records declared with a record size of 0.\n", nxsty);
+		return;
+	}
+	if(xstyoffs + nxsty * xstysize > size) {
 		printf("Warning: table extends past the end of the chunk (%u bytes).\n", size);
 		return;
 	}
 
-	// The index tables store byte offsets; report the slot numbers they
-	// select, since those are what the record dumps below are keyed on.
-	printf("\nClass -> geo slot / sty slot:");
+	// Slot numbers are 1-based; 0 is the "all defaults" sentinel, which has
+	// no stored record. Print it as "-" rather than as a slot, since there
+	// is nothing in the dumps below for it to point at.
+	printf("\nClass -> geo slot / sty slot  (- = all defaults):");
 	for(i = 0; i < nclass; i++) {
 		uint8_t g = d[geoidxoffs + i], st = d[styidxoffs + i];
 		if(!(i % 8)) printf("\n  %04x: ", i);
-		printf(" %02x/%02x", g / 8, st / 4);
-		if((g & 7) || (st & 3) || g / 8 >= ngeo || st / 4 >= nsty) printf("!");
+		if(g) printf(" %02x/", g); else printf("  -/");
+		if(st) printf("%02x", st); else printf(" -");
+		if(g > ngeo || st > nsty) printf("!");
 	}
 	printf("\n");
 
-	printf("\nsty (%d records, 4 bytes each):\n", nsty);
+	printf("\nsty (%d records, 4 bytes each; slot 0 is the sentinel):\n", nsty);
 	for(i = 0; i < nsty; i++) {
 		uint8_t *s = d + styoffs + i * 4;
 
 		fg = s[2];
-		printf("  %02x: on=", i);
+		printf("  %02x: on=", i + 1);
 		put_style_bits(s[0]);
 		printf("  off=");
 		put_style_bits(s[1]);
@@ -287,24 +322,22 @@ void decode_usty(struct chunk *ch) {
 		} else {
 			printf("  fg=%02x", fg);
 		}
-		if(!i) printf("   (default)");
 		printf("\n");
 	}
 
-	printf("\ngeo (%d records, 8 bytes each):\n", ngeo);
+	printf("\ngeo (%d records, 8 bytes each; slot 0 is the sentinel):\n", ngeo);
 	for(i = 0; i < ngeo; i++) {
 		uint8_t *g = d + geooffs + i * 8;
 		uint8_t fl = g[7];
 
-		printf("  %02x: mtop=%d mbottom=%d padleft=%d width=%d%s height=%d%s float=%s align=%s%s\n",
-			i,
+		printf("  %02x: mtop=%d mbottom=%d padleft=%d width=%d%s height=%d%s float=%s align=%s\n",
+			i + 1,
 			g[0], g[1], g[2], g[3],
 			(fl & 0x01)? "%" : "",
 			g[4],
 			(fl & 0x02)? "%" : "",
 			(g[5] < 3)? float_names[g[5]] : "?",
-			(g[6] < 3)? align_names[g[6]] : "?",
-			i? "" : "   (default)");
+			(g[6] < 3)? align_names[g[6]] : "?");
 	}
 
 	if(nxsty) {
@@ -315,13 +348,28 @@ void decode_usty(struct chunk *ch) {
 			"-", "R", "B", "BR", "I", "IR", "BI", "BIR"
 		};
 
-		printf("\nxsty (%d body records, %d bytes each):\n", nxsty, USTY_XSTY_SIZE);
-		printf("  palette index = reverse | bold << 1 | italic << 2"
-			"  (B=bold I=italic R=reverse)\n");
+		// Only byte 0 (the class index SET_BODY scans for) is common to
+		// every target. The rest of the record is the frontend's palette,
+		// so the field-by-field dump below is c64-shaped; another 6502
+		// platform with a different palette gets a hex dump rather than a
+		// confident misreading of its bytes.
+		int c64shape = (tag & 0xf0) == 0x10 && xstysize == 6;
+
+		printf("\nxsty (%d body records, %d bytes each):\n", nxsty, xstysize);
+		if(c64shape) {
+			printf("  palette index = reverse | bold << 1 | italic << 2"
+				"  (B=bold I=italic R=reverse)\n");
+		}
 		for(i = 0; i < nxsty; i++) {
-			uint8_t *x = d + xstyoffs + i * USTY_XSTY_SIZE;
+			uint8_t *x = d + xstyoffs + i * xstysize;
 			int j;
 
+			if(!c64shape) {
+				printf("  %02x: class=%-3d payload:", i, x[0]);
+				for(j = 1; j < xstysize; j++) printf(" %02x", x[j]);
+				printf("   (unknown body-record shape)\n");
+				continue;
+			}
 			printf("  %02x: class=%-3d background=%x border=%x\n      palette:",
 				i, x[0], x[1] & 15, x[1] >> 4);
 			for(j = 0; j < 8; j++) {

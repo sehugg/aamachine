@@ -176,6 +176,15 @@
 
 #define AA_MAX_TEMP		(REG_TMP - REG_X) // 48
 
+// USTY chunk (precomputed style table for the 6502 targets; see
+// STYLE_SPEC.md). Shared by aambundle's generator and aamshow's decoder so
+// the two cannot drift.
+#define USTY_VERSION		9	// 0..15, can wrap since it's internal
+#define USTY_HDRSIZE		14
+#define USTY_GEO_SIZE		8
+#define USTY_STY_SIZE		4
+#define USTY_XSTY_MAXSIZE	8	// xsty size is per-target, buffer bound only
+
 #define AASTYLE_REVERSE		1
 #define AASTYLE_BOLD		2
 #define AASTYLE_ITALIC		4
