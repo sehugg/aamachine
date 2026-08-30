@@ -146,44 +146,13 @@ static const uint8_t c64_rgb[16][3] = {
 	{119, 119, 119}, {170, 255, 102}, {0, 136, 255}, {187, 187, 187}
 };
 
-static const struct {
-	const char *name;
-	uint8_t r, g, b;
-} css_colornames[] = {
-	{"black", 0x00, 0x00, 0x00},
-	{"silver", 0xc0, 0xc0, 0xc0},
-	{"gray", 0x80, 0x80, 0x80},
-	{"grey", 0x80, 0x80, 0x80},
-	{"white", 0xff, 0xff, 0xff},
-	{"maroon", 0x80, 0x00, 0x00},
-	{"red", 0xff, 0x00, 0x00},
-	{"purple", 0x80, 0x00, 0x80},
-	{"fuchsia", 0xff, 0x00, 0xff},
-	{"magenta", 0xff, 0x00, 0xff},
-	{"green", 0x00, 0x80, 0x00},
-	{"lime", 0x00, 0xff, 0x00},
-	{"olive", 0x80, 0x80, 0x00},
-	{"yellow", 0xff, 0xff, 0x00},
-	{"navy", 0x00, 0x00, 0x80},
-	{"blue", 0x00, 0x00, 0xff},
-	{"teal", 0x00, 0x80, 0x80},
-	{"aqua", 0x00, 0xff, 0xff},
-	{"cyan", 0x00, 0xff, 0xff},
-	{"orange", 0xff, 0xa5, 0x00},
-	{"brown", 0xa5, 0x2a, 0x2a},
-	{"darkgray", 0x33, 0x33, 0x33},
-	{"darkgrey", 0x33, 0x33, 0x33},
-	{"lightgray", 0xbb, 0xbb, 0xbb},
-	{"lightgrey", 0xbb, 0xbb, 0xbb},
-	{"lightred", 0xff, 0x77, 0x77},
-	{"lightgreen", 0xaa, 0xff, 0x66},
-	{"lightblue", 0x00, 0x88, 0xff}
-};
-
-// The 16 CSS basic colors map by name to their obvious VIC-II counterpart.
-// Pure nearest-RGB is wrong here: CSS "green" (#008000) is closer to
-// VIC-II dark grey (11) than to VIC-II green (#00cc55), which surprises
-// authors far more than it helps. Hex/rgb() values still use nearest-match.
+// CSS color names map by name to their obvious VIC-II counterpart, so the
+// full basic + extended CSS palettes fold into one table. Pure nearest-RGB
+// is wrong here: CSS "green" (#008000) is closer to VIC-II dark grey (11)
+// than to VIC-II green (#00cc55), which surprises authors far more than it
+// helps. Hex/rgb() values still use nearest-match. lightred/lightgreen/
+// lightblue coincide exactly with VIC-II colors 10/13/14, so those names can
+// live here too instead of going through rgb_to_c64().
 static const struct {
 	const char *name;
 	uint8_t vic;
@@ -211,7 +180,10 @@ static const struct {
 	{"darkgrey", 11},
 	{"lightgray", 15},
 	{"lightgrey", 15},
-	{"teal", 3}
+	{"teal", 3},
+	{"lightred", 10},
+	{"lightgreen", 13},
+	{"lightblue", 14}
 };
 
 // Map an rgb triplet to the nearest VIC-II color, using a perceptual
@@ -262,7 +234,7 @@ static int parse_color(const char *v, int *out) {
 			r = hex(v[0]) * 0x11;
 			g = hex(v[1]) * 0x11;
 			b = hex(v[2]) * 0x11;
-		} else if(n == 6) {
+		}else if(n == 6) {
 			r = (hex(v[0]) << 4) | hex(v[1]);
 			g = (hex(v[2]) << 4) | hex(v[3]);
 			b = (hex(v[4]) << 4) | hex(v[5]);
@@ -292,19 +264,8 @@ static int parse_color(const char *v, int *out) {
 			}
 		}
 		if(vic < 0) {
-			for(i = 0; i < (int)(sizeof(css_colornames) / sizeof(css_colornames[0])); i++) {
-				if(!strcasecmp(v, css_colornames[i].name)) {
-					r = css_colornames[i].r;
-					g = css_colornames[i].g;
-					b = css_colornames[i].b;
-					break;
-				}
-			}
-			if(i == (int)(sizeof(css_colornames) / sizeof(css_colornames[0]))) {
-				return 0;
-			}
-			*out = rgb_to_c64(r, g, b);
-			return 1;
+			warning(WARN_STYLE, "Unknown color \"%s\".", v);
+			return 0;
 		}
 		*out = vic;
 		return 1;
@@ -551,7 +512,7 @@ static styclass *parse_look(int *nclassp) {
 	for(i = 0; i < n; i++) {
 		uint32_t ptr, end;
 
-		if(2 + 2 * i + 2 > looksize) break;
+		if((uint32_t)(2 + 2 * i + 2) > looksize) break;
 		ptr = get16(look + 2 + 2 * i);
 		if(ptr >= looksize) continue;
 		end = looksize;
