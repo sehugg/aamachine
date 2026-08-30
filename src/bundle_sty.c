@@ -105,6 +105,13 @@ struct sty_target {
 	                        // the *packing* below is c64-shaped: a target with
 	                        // a different palette needs its own packer, not
 	                        // just a different size here.
+	// Screen size in character cells, for range-checking absolute lengths.
+	// mincols/maxcols bracket the machine's real text widths: the c64 is a
+	// fixed 40; the apple2 is 40 or 80 depending on the card present, and
+	// the bundler cannot know which; aambox is exactly 80. The engine clamps
+	// heights to 19 (enter_status: cmp #20 / lda #19, engine.s:3931).
+	int mincols, maxcols;
+	int maxrows;
 };
 
 // stymask is what the target's io_mstyle looks at, and nothing else reads
@@ -121,14 +128,15 @@ struct sty_target {
 //   aambox  io_mstyle is a bare rts (aambox_frontend.s:221). Nothing.
 
 static const struct sty_target sty_aambox = {
-	"aambox", STY_TAG_AAMBOX, 0, 0, 0, 0
+	"aambox", STY_TAG_AAMBOX, 0, 0, 0, 0, 80, 80, 20
 };
 static const struct sty_target sty_c64 = {
 	"c64", STY_TAG_C64, 1,
-	AASTYLE_REVERSE | AASTYLE_BOLD | AASTYLE_ITALIC, c64_bodydef, XSTY_SIZE_C64
+	AASTYLE_REVERSE | AASTYLE_BOLD | AASTYLE_ITALIC, c64_bodydef, XSTY_SIZE_C64,
+	40, 40, 20
 };
 static const struct sty_target sty_apple2 = {
-	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0, 0
+	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0, 0, 40, 80, 20
 };
 
 static const struct sty_target *sty_target;
@@ -315,32 +323,84 @@ static int isabsunit(const char *v) {
 		|| (v[0] == 'c' && v[1] == 'h');
 }
 
-// Parse a length, mirroring css_abs_rel in engine.s: leading digits, then an
-// optional fractional part (ignored), then a unit. Returns 0 on failure,
-// 1 on success; *unit 0 = absolute, 1 = percent.
-static int parse_length(const char *v, int *val, int *unit) {
-	int n = 0;
+// Parse a length, mirroring css_abs_rel in engine.s: an optional leading
+// decimal point, then digits, then an optional fractional part (both dot
+// forms are truncated -- ".3em" is 0, exactly as the engine computes), then
+// a unit. Returns 0 on failure, 1 on success; *unit 0 = absolute,
+// 1 = percent. *flags reports what was lost so the caller can warn:
+//   PLEN_FRAC  a fractional part was dropped
+//   PLEN_OVER  the value exceeds 255, the engine's one-byte storage, and
+//              will wrap
+#define PLEN_FRAC	1
+#define PLEN_OVER	2
 
+static int parse_length(const char *v, int *val, int *unit, int *flags) {
+	long n = 0;
+	int frac = 0;
+
+	*flags = 0;
+	if(*v == '.') {             // ".3em" is 0.3em on the web
+		frac = 1;
+		v++;
+	}
 	if(*v < '0' || *v > '9') return 0;
 	while(*v >= '0' && *v <= '9') {
-		if(n < 255) n = n * 10 + (*v - '0');
+		if(n < 1000000) n = n * 10 + (*v - '0');
 		v++;
 	}
 	while(*v == '.') {
+		frac = 1;
 		v++;
 		while(*v >= '0' && *v <= '9') v++;
 	}
+	if(n > 255) *flags |= PLEN_OVER;
+	if(frac) *flags |= PLEN_FRAC;
 	if(*v == '%') {
-		*val = n;
+		*val = (int) n;
 		*unit = 1;
 		return 1;
 	}
 	if(isabsunit(v)) {
-		*val = n;
+		*val = (int) n;
 		*unit = 0;
 		return 1;
 	}
 	return 0;
+}
+
+// Warn about a length declaration the 8-bit machine will not honor the way
+// the web would. prop is the CSS property, value the raw text; val/st/unit/
+// flags come from parse_length(). relok says whether a percent is
+// meaningful for this property (true for width/height, false for margins).
+static void warn_length(const char *prop, const char *value, int val, int st, int unit, int flags, int relok) {
+	if(st) {
+		if(flags & PLEN_FRAC) {
+			//warning(WARN_STYLE, "Fractional %s \"%s\" is truncated.", prop, value);
+		}
+		if(unit) {
+			// Percent. A width or height above 100% means "bigger than the
+			// whole screen" -- the web lays that out by overflowing, an
+			// 8-bit machine cannot. (For height it is doubly pointless:
+			// the engine treats any relative height as one row.) Margins
+			// reject percent outright, below.
+			if(relok && val > 100) {
+				warning(WARN_STYLE,
+					"Percent %s \"%s\" is more than 100%% and will not fit the screen.",
+					prop, value);
+			} else if(!relok) {
+				warning(WARN_STYLE, "Percent %s \"%s\" is not supported and was ignored.", prop, value);
+			}
+		} else if(flags & PLEN_OVER) {
+			// An absolute (em/ch) length that no 8-bit screen can show.
+			int max = relok? sty_target->maxcols : sty_target->maxrows;
+			warning(WARN_STYLE,
+				"%s \"%s\" is more than %s's %d %s and will be clamped.",
+				prop, value, sty_target->name, max,
+				relok? "columns" : "rows");
+		}
+	} else {
+		warning(WARN_STYLE, "Ignoring %s: unsupported value \"%s\".", prop, value);
+	}
 }
 
 // Whole-value case-insensitive match, ignoring trailing whitespace.
@@ -360,6 +420,7 @@ static void parse_decl(styclass *c, const char *p, int len) {
 	char buf[256];
 	char *colon, *key, *value, *bang, *q;
 	int prefixed = 0;
+	int matched = 0;
 	int i;
 
 	if(len >= (int) sizeof(buf)) len = sizeof(buf) - 1;
@@ -382,6 +443,15 @@ static void parse_decl(styclass *c, const char *p, int len) {
 	}
 	while(q > key && (q[-1] == ' ' || q[-1] == '\t')) *--q = 0;
 
+	// -iftf-text-decoration and other non-system -iftf- properties
+	// must be parsed here, before we mess up the string
+	if(!strcmp(key, "-iftf-text-decoration")) {
+		if(matchval(value, "reverse")) c->styon |= AASTYLE_REVERSE;
+		else if(matchval(value, "none")) c->styoff |= AASTYLE_REVERSE;
+		else warning(WARN_STYLE, "Invalid value for %s: %s", key, value);
+		return;
+	}
+
 	// -iftf-<system>-<property>: only honored when <system> matches the
 	// target being bundled.
 	if(!strncmp(key, "-iftf-", 6)) {
@@ -390,7 +460,10 @@ static void parse_decl(styclass *c, const char *p, int len) {
 		prop = strchr(key, '-');
 		if(!prop) return;
 		*prop = 0;
-		if(strcmp(key, sty_target->name)) return;
+		if(strcmp(key, sty_target->name)) {
+			warning(WARN_STYLE, "Invalid system: -iftf-%s", key);
+			return;
+		}
 		key = prop + 1;
 		prefixed = 1;
 	}
@@ -415,50 +488,121 @@ static void parse_decl(styclass *c, const char *p, int len) {
 	}
 
 	if(!strcmp(key, "width")) {
-		int val, unit;
-		if(parse_length(value, &val, &unit)) {
+		int val, unit, flags, st;
+		st = parse_length(value, &val, &unit, &flags);
+		if(st == 1) {
 			c->width = val;
 			if(unit) c->flags |= STY_RELW;
 		}
+		warn_length(key, value, val, st, unit, flags, 1);
+		matched = 1;
 	} else if(!strcmp(key, "height")) {
-		int val, unit;
-		if(parse_length(value, &val, &unit)) {
+		int val, unit, flags, st;
+		st = parse_length(value, &val, &unit, &flags);
+		if(st == 1) {
 			c->height = val;
 			if(unit) c->flags |= STY_RELH;
 		}
+		warn_length(key, value, val, st, unit, flags, 1);
+		matched = 1;
 	} else if(!strcmp(key, "margin-top")) {
-		int val, unit;
-		if(parse_length(value, &val, &unit) && !unit) c->mtop = val;
+		int val, unit, flags, st;
+		st = parse_length(value, &val, &unit, &flags);
+		if(st == 1 && !unit) c->mtop = val;
+		warn_length(key, value, val, st, unit, flags, 0);
+		matched = 1;
 	} else if(!strcmp(key, "margin-bottom")) {
-		int val, unit;
-		if(parse_length(value, &val, &unit) && !unit) c->mbottom = val;
+		int val, unit, flags, st;
+		st = parse_length(value, &val, &unit, &flags);
+		if(st == 1 && !unit) c->mbottom = val;
+		warn_length(key, value, val, st, unit, flags, 0);
+		matched = 1;
 	} else if(!strcmp(key, "margin-left") || !strcmp(key, "padding-left")) {
-		int val, unit;
-		if(parse_length(value, &val, &unit) && !unit) c->padleft = val;
+		int val, unit, flags, st;
+		st = parse_length(value, &val, &unit, &flags);
+		if(st == 1 && !unit) c->padleft = val;
+		warn_length(key, value, val, st, unit, flags, 0);
+		matched = 1;
 	} else if(!strcmp(key, "float")) {
+		matched = 1;
 		if(matchval(value, "left")) c->flo = 1;
 		else if(matchval(value, "right")) c->flo = 2;
+		else if(!matchval(value, "none") && !matchval(value, "inherit")) {
+			warning(WARN_STYLE, "Invalid value for float: %s (only left, right and none are supported).", value);
+		}
 	} else if(!strcmp(key, "margin")) {
+		matched = 1;
 		if(matchval(value, "auto")) c->flo = 3;
+		else warning(WARN_STYLE, "Invalid value for margin: %s (use \"margin: auto\").", value);
 	} else if(!strcmp(key, "text-align")) {
+		matched = 1;
 		if(matchval(value, "center")) c->align = 3;
 		else if(matchval(value, "right")) c->align = 2;
 		else if(matchval(value, "left")) c->align = 1;
+		else if(!matchval(value, "inherit")) {
+			warning(WARN_STYLE, "Invalid value for text-align: %s (only left, right and center are supported).", value);
+		}
 	} else if(!strcmp(key, "font-style")) {
+		matched = 1;
 		if(matchval(value, "italic") || matchval(value, "oblique")) c->styon |= AASTYLE_ITALIC;
 		else if(matchval(value, "normal")) c->styoff |= AASTYLE_ITALIC;
+		else if(!matchval(value, "inherit")) {
+			warning(WARN_STYLE, "Invalid value for font-style: %s (only italic, oblique and normal are supported).", value);
+		}
 	} else if(!strcmp(key, "font-weight")) {
+		matched = 1;
 		if(matchval(value, "bold")) c->styon |= AASTYLE_BOLD;
 		else if(matchval(value, "normal")) c->styoff |= AASTYLE_BOLD;
+		else if(!matchval(value, "inherit")) {
+			// In particular: numeric weights (400, 700) are valid web CSS
+			// but mean nothing here.
+			warning(WARN_STYLE, "Invalid value for font-weight: %s (only bold and normal are supported).", value);
+		}
 	} else if(!strcmp(key, "font-family")) {
+		matched = 1;
 		if(strstr(value, "monospace")) c->styon |= AASTYLE_FIXED;
 		else if(!matchval(value, "inherit")) c->styoff |= AASTYLE_FIXED;
 	} else if(!strcmp(key, "text-decoration") || !strcmp(key, "reverse-video")) {
-		if(strstr(value, "reverse")) c->styon |= AASTYLE_REVERSE;
-		else if(!matchval(value, "inherit")) c->styoff |= AASTYLE_REVERSE;
-	} else if(sty_target->have_vic_color && !strcmp(key, "color")) {
-		int ci;
-		if(parse_color(value, &ci)) c->fg = ci;
+		matched = 1;
+		if(strstr(value, "reverse")) {
+			c->styon |= AASTYLE_REVERSE;
+		} else if(matchval(value, "inherit")) {
+			// Nothing: inherit is the no-op.
+		} else {
+			// "none" is the explicit off; any other value (underline is
+			// the classic web one) neither sets nor unsets reverse on
+			// the web, so warn rather than quietly turning it off.
+			c->styoff |= AASTYLE_REVERSE;
+			if(!strcmp(key, "text-decoration") && !matchval(value, "none")) {
+				warning(WARN_STYLE, "Invalid value for text-decoration: %s (only reverse, none and inherit are supported).", value);
+			}
+		}
+	} else if(!strcmp(key, "color")) {
+		matched = 1;
+		if(sty_target->have_vic_color) {
+			int ci;
+			if(parse_color(value, &ci)) c->fg = ci;
+		} else {
+			warning(WARN_STYLE, "color is not supported on %s and was ignored.", sty_target->name);
+		}
+	} else if(!strcmp(key, "display")) {
+		matched = 1;
+		if(matchval(value, "none")) {
+			warning(WARN_STYLE, "display: none is not supported; the element will still be shown.");
+		}
+	} else if(!strcmp(key, "visibility")) {
+		matched = 1;
+		if(matchval(value, "hidden")) {
+			warning(WARN_STYLE, "visibility: hidden is not supported; the element will still be shown.");
+		}
+	}
+
+	// A prefix that named the target but a property the bundler does not
+	// know. This is the one case where the author addressed this machine
+	// specifically, so silence would hide a real gap -- the -iftf- set is
+	// young and grows.
+	if(prefixed && !matched) {
+		warning(WARN_STYLE, "-iftf-%s-%s is not supported yet.", sty_target->name, key);
 	}
 	// Anything else is ignored, as an interpreter must per the spec. That
 	// includes background-color, border and border-color: a div's tint and

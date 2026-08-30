@@ -30,29 +30,44 @@ int nwarning;
 static int warnings_as_errors;
 static int show_all_help;
 
+// One bit per warn_id_t: set once the "Use --no-warn-..." hint has been
+// printed for that kind, so a story that triggers dozens of style warnings
+// does not print the same hint dozens of times.
+static unsigned int warned_mask;
+
 // Maps each warning kind to the flag that disables it and to its level
 // variable, so warning() can suggest the right --no-warn-* flag -- unless
 // the warning was forced on with --warn-*. Keep in step with warn_id_t.
 
 static const struct {
-	const char *disable;
+	const char *category;
 	int *level;
 } warn_info[WARN_COUNT] = {
-	{"no-warn-charset",  &charset_warning_level},
-	{"no-warn-keyboard", &keyboard_warning_level},
-	{"no-warn-style",    &style_warning_level}
+	{"charset",  &charset_warning_level},
+	{"keyboard", &keyboard_warning_level},
+	{"style",    &style_warning_level}
 };
 
 void warning(warn_id_t id, const char *fmt, ...) {
 	va_list ap;
+	char msg[1024];
 
-	fprintf(stderr, "%s ", warnings_as_errors? "Error:" : "Warning:");
+	// --no-warn-* really turns the warning off, not just the hint. The
+	// level variable defaults to WARN_DEFAULT; only --warn-* (WARN_ALWAYS)
+	// or --no-warn-* (WARN_NEVER) change it.
+	if(id < WARN_COUNT && *warn_info[id].level == WARN_NEVER) return;
+
 	va_start(ap, fmt);
-	vfprintf(stderr, fmt, ap);
+	vsnprintf(msg, sizeof(msg), fmt, ap);
 	va_end(ap);
-	fprintf(stderr, "\n");
+
+	fprintf(stderr, "%s %s\n", warnings_as_errors? "Error:" : "Warning:", msg);
 	if(id < WARN_COUNT && *warn_info[id].level != WARN_ALWAYS) {
-		fprintf(stderr, "Use --%s to disable this warning.\n", warn_info[id].disable);
+		if(!(warned_mask & (1u << id))) {
+			fprintf(stderr, "(Use --no-warn-%s to disable %s warnings.)\n",
+				warn_info[id].category, warn_info[id].category);
+			warned_mask |= (1u << id);
+		}
 	}
 	nwarning++;
 }
