@@ -461,6 +461,9 @@ void usage(char *prgname, int all) {
 	fprintf(stderr, "c64               Directory with c64 disk image.\n");
 	fprintf(stderr, "apple2            Directory with apple2 disk images.\n");
 	fprintf(stderr, "web:story         Just story.js for the web interpreter.\n");
+	if(all) {
+		fprintf(stderr, "aambox            Just the rewritten .aastory, for the aambox test platform.\n");
+	}
 	exit(1);
 }
 
@@ -524,7 +527,8 @@ int main(int argc, char **argv) {
 	if(strcmp(target, "web")
 	&& strcmp(target, "web:story")
 	&& strcmp(target, "c64")
-	&& strcmp(target, "apple2")) {
+	&& strcmp(target, "apple2")
+	&& strcmp(target, "aambox")) {
 		fprintf(stderr, "Unsupported target \"%s\".\n", target);
 		exit(1);
 	}
@@ -532,6 +536,8 @@ int main(int argc, char **argv) {
 	if(!dirname) {
 		if(!strcmp(target, "web:story")) {
 			dirname = "story.js";
+		} else if(!strcmp(target, "aambox")) {
+			dirname = "story.aastory";
 		} else {
 			dirname = malloc(strlen(argv[optind]) + 8);
 			strcpy(dirname, argv[optind]);
@@ -584,6 +590,8 @@ int main(int argc, char **argv) {
 
 	if(!strcmp(target, "web:story")) {
 		bundle_web_story(dirname);
+	} else if(!strcmp(target, "aambox")) {
+		bundle_aambox(dirname);
 	} else {
 		if(mkdir(dirname, 0777) && errno != EEXIST) {
 			fprintf(stderr, "%s: %s\n", dirname, strerror(errno));

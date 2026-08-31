@@ -128,8 +128,12 @@ chnklsb	= HEAPEND+$0d0+0*CH_N
 chnkssb	= HEAPEND+$0d0+1*CH_N
 chnkmsb	= HEAPEND+$0d0+2*CH_N
 
-databuf = HEAPEND+$0f0	; 8 bytes
-filesz	= HEAPEND+$0f8	; 3 bytes, b-e
+; placed relative to the chunk table so that
+; adding a chunk slot cannot silently
+; overlap them; there are 48 bytes here and
+; the three uses need 3*CH_N + 11.
+databuf = HEAPEND+$0d0+3*CH_N	; 8 bytes
+filesz	= databuf+8		; 3 bytes, b-e
 
 ; for each physical page, what
 ; virtual page owns it (initialized
@@ -166,6 +170,7 @@ STY_MBOTTOM	= 3
 STY_STYON	= 4
 STY_STYOFF	= 5
 STY_FLAGS	= 6
+STY_FG		= 7	; not read yet; USTY fills it, $80 = inherit
 
 STYF_RELW	= $01
 STYF_RELH	= $02
@@ -9901,6 +9906,102 @@ done
 	rts
 
 initengine4
+	; Build the style table -- nclass
+	; records of 8 bytes, indexed by
+	; class, at stybase.
+	;
+	; aambundle precomputes the whole
+	; table into a USTY chunk and drops
+	; LOOK, so this is normally a blit.
+	;
+	; A build that defines NO_CSS_PARSER
+	; has no other path -- aambundle
+	; refuses to write a disk without a
+	; USTY chunk for those targets, so
+	; there is nothing to fall back to
+	; and nothing to test for. That is
+	; the c64 and the apple2, and it is
+	; worth 802 bytes.
+	;
+	; aambox keeps the style sheet
+	; parser, because the test suite
+	; hands it raw .aastory files that
+	; have never been near aambundle.
+
+#ifndef NO_CSS_PARSER
+	.(
+	lda	chnklsb+CH_USTY
+	ora	chnkssb+CH_USTY
+	ora	chnkmsb+CH_USTY
+	bne	haveusty
+
+	jmp	parselook
+haveusty
+	.)
+#endif
+
+	.(
+	; The header is
+	;   0 tag  1 nclass
+	;   2 nxsty  3 xstysize
+	; followed by the records. No
+	; offsets are stated because none
+	; are needed. readdata leaves
+	; virdata just past what it read,
+	; so it already points at the
+	; records here, and readdatato
+	; leaves it pointing at the body
+	; records for a later SET_BODY.
+
+	lda	chnklsb+CH_USTY
+	sta	virdata+2
+	lda	chnkssb+CH_USTY
+	sta	virdata+1
+	lda	chnkmsb+CH_USTY
+	sta	virdata+0
+	lda	#4
+	jsr	readdata
+
+	lda	databuf+1
+	sta	count		; nclass
+
+	; allocwords takes a word count,
+	; so nclass*8 bytes is nclass*4
+
+	lda	#0
+	sta	temp
+	lda	count
+	asl
+	rol	temp
+	asl
+	rol	temp
+	tax
+	ldy	temp
+	jsr	allocwords
+	stx	stybase
+	sty	stybase+1
+	stx	phydata
+	sty	phydata+1
+
+	lda	#0
+	sta	physize+1
+	lda	count
+	asl
+	rol	physize+1
+	asl
+	rol	physize+1
+	asl
+	rol	physize+1
+	sta	physize
+	jsr	readdatato
+
+#ifndef NO_CSS_PARSER
+	jmp	styledone
+#endif
+	.)
+
+#ifndef NO_CSS_PARSER
+parselook
 	; LOOK.
 
 	.(
@@ -10274,6 +10375,8 @@ noc1
 classdone
 	.)
 
+styledone
+#endif
 	.(
 	lda	chnklsb+CH_CODE
 	sec
@@ -10289,6 +10392,7 @@ classdone
 
 	rts
 
+#ifndef NO_CSS_PARSER
 css_abs_rel
 	; input inpbuf = data
 	; input x = data offset
@@ -10408,6 +10512,8 @@ succeed
 	rts
 	.)
 
+#endif
+
 CH_CODE	= 0
 CH_LANG	= 1
 CH_META	= 2
@@ -10418,13 +10524,15 @@ CH_DICT = 6
 CH_MAPS = 7
 CH_LOOK = 8
 CH_URLS = 9
-CH_N	= 10
+CH_USTY = 10
+CH_N	= 11
 chunknames
-	.byt	"CLMIWTDMLU"
-	.byt	"OAENRAIAOR"
-	.byt	"DNTIIGCPOL"
-	.byt	"EGATTSTSKS"
+	.byt	"CLMIWTDMLUU"
+	.byt	"OAENRAIAORS"
+	.byt	"DNTIIGCPOLT"
+	.byt	"EGATTSTSKSY"
 
+#ifndef NO_CSS_PARSER
 CSS_WIDTH	= 0
 CSS_HEIGHT	= 1
 CSS_FLOAT	= 2
@@ -10466,6 +10574,7 @@ cssparam_none	= * - cssparams
 
 css_monospace
 	.byt	"monospace"
+#endif
 
 allocwords
 	; input x = size lsb

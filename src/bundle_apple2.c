@@ -874,6 +874,7 @@ void bundle_apple2(char *dirname) {
 	check_keyboard("apple2", AAKBD_APPLE2);
 	bundle_sty_set_target("apple2");
 	rewrite_chunks(rewrite_6502_sty, 1);
+	bundle_sty_check();
 
 	writefile(dirname, "AAM.SYSTEM", table_a2terp, sizeof(table_a2terp));
 	/* The interpreter reads STORY a page at a time, so round the file up

@@ -168,6 +168,7 @@ void bundle_c64(char *dirname) {
 	check_keyboard("c64", AAKBD_C64);
 	bundle_sty_set_target("c64");
 	rewrite_chunks(rewrite_6502_sty, 1);
+	bundle_sty_check();
 
 	fnsize = strlen(dirname) + strlen(storyname) + 64;
 	filename = malloc(fnsize);

@@ -192,7 +192,7 @@ void decode_look(struct chunk *ch) {
 // Every array offset follows from the counts, so the header carries none.
 // The xsty record shape follows from the tag's target nibble.
 //
-// Keep in step with STY_VERSION in bundle_sty.c.
+// Keep in step with the record layouts in bundle_sty.c.
 
 static void put_style_bits(uint8_t bits) {
 	int first = 1;
@@ -207,25 +207,278 @@ static void put_style_bits(uint8_t bits) {
 static const char *float_names[] = {"none", "left", "right", "center"};
 static const char *align_names[] = {"none", "left", "right", "center"};
 
+// The body-record array is byte-identical in both revisions, so both dumps
+// end here.
+
+static void decode_xsty(uint8_t *d, uint8_t tag, uint32_t xstyoffs,
+	uint8_t nxsty, uint8_t xstysize)
+{
+	// Body records: background, border, then eight palette entries
+	// indexed by the low three style bits. All ten are always present;
+	// the bundler resolves undeclared ones to the frontend's defaults.
+	static const char *palnames[8] = {
+		"-", "R", "B", "BR", "I", "IR", "BI", "BIR"
+	};
+	int i;
+
+	// Only byte 0 (the class index SET_BODY scans for) is common to
+	// every target. The rest of the record is the frontend's palette,
+	// so the field-by-field dump below is c64-shaped; another 6502
+	// platform with a different palette gets a hex dump rather than a
+	// confident misreading of its bytes.
+	int c64shape = (tag & 0xf0) == 0x10 && xstysize == 6;
+
+	printf("\nxsty (%d body records, %d bytes each):\n", nxsty, xstysize);
+	if(c64shape) {
+		printf("  palette index = reverse | bold << 1 | italic << 2"
+			"  (B=bold I=italic R=reverse)\n");
+	}
+	for(i = 0; i < nxsty; i++) {
+		uint8_t *x = d + xstyoffs + i * xstysize;
+		int j;
+
+		if(!c64shape) {
+			printf("  %02x: class=%-3d payload:", i, x[0]);
+			for(j = 1; j < xstysize; j++) printf(" %02x", x[j]);
+			printf("   (unknown body-record shape)\n");
+			continue;
+		}
+		printf("  %02x: class=%-3d background=%x border=%x\n      palette:",
+			i, x[0], x[1] & 15, x[1] >> 4);
+		for(j = 0; j < 8; j++) {
+			printf(" [%s]=%x", palnames[j],
+				(j & 1)? x[2 + j / 2] >> 4 : x[2 + j / 2] & 15);
+		}
+		printf("\n");
+	}
+}
+
+// Revision 11: a flat array of one record per class, in the field order
+// engine.s indexes with stybase + class * 8.
+
+static void decode_usty_flat(uint8_t *d, uint32_t size, uint8_t tag) {
+	uint8_t nclass, nxsty, xstysize;
+	uint32_t recoffs, xstyoffs;
+	int i;
+
+	if(size < USTY_FLAT_HDRSIZE) {
+		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
+		return;
+	}
+
+	nclass = d[1];
+	nxsty = d[2];
+	xstysize = d[3];
+
+	// No offsets in the header: the records sit at a fixed offset and the
+	// body records follow them, so both bases are computed the same way
+	// here as in the engine.
+	recoffs = USTY_FLAT_HDRSIZE;
+	xstyoffs = recoffs + nclass * USTY_FLAT_RECSIZE;
+
+	printf("nclass: %d  nxsty: %d", nclass, nxsty);
+	if(nxsty) {
+		printf(" (%d bytes each)", xstysize);
+	} else if(!xstysize) {
+		printf(" (target has no body records)");
+	}
+	printf("\n");
+	printf("Offsets: rec %u  xsty %u\n", recoffs, xstyoffs);
+
+	if(nxsty && !xstysize) {
+		printf("Warning: %d body records declared with a record size of 0.\n", nxsty);
+		return;
+	}
+	if(xstyoffs + nxsty * xstysize > size) {
+		printf("Warning: table extends past the end of the chunk (%u bytes).\n", size);
+		return;
+	}
+
+	printf("\nClass records (%d bytes each):\n", USTY_FLAT_RECSIZE);
+	for(i = 0; i < nclass; i++) {
+		uint8_t *r = d + recoffs + i * USTY_FLAT_RECSIZE;
+		uint8_t fl = r[USTY_F_FLAGS];
+		int flo = (fl & USTY_FL_FLOATL)? 1 : 0;
+
+		if(fl & USTY_FL_FLOATR) flo = 2;
+
+		printf("  %04x:", i);
+		if(r[USTY_F_WIDTH]) {
+			printf(" width=%d%s", r[USTY_F_WIDTH], (fl & USTY_FL_RELW)? "%" : "");
+		}
+		if(r[USTY_F_HEIGHT]) {
+			printf(" height=%d%s", r[USTY_F_HEIGHT], (fl & USTY_FL_RELH)? "%" : "");
+		}
+		if(r[USTY_F_MTOP]) printf(" mtop=%d", r[USTY_F_MTOP]);
+		if(r[USTY_F_MBOTTOM]) printf(" mbottom=%d", r[USTY_F_MBOTTOM]);
+		if(flo) printf(" float=%s", float_names[flo]);
+		if(fl & USTY_FL_ALIGN) {
+			printf(" align=%s",
+				align_names[(fl & USTY_FL_ALIGN) >> USTY_FL_ALIGN_SHIFT]);
+		}
+		if(r[USTY_F_STYON]) {
+			printf(" on=");
+			put_style_bits(r[USTY_F_STYON]);
+		}
+		if(r[USTY_F_STYOFF]) {
+			printf(" off=");
+			put_style_bits(r[USTY_F_STYOFF]);
+		}
+		if(r[USTY_F_FG] != 0x80) printf(" fg=%02x", r[USTY_F_FG]);
+		// An all-default class still has a record here; revision 9 was the
+		// layout that could leave it out.
+		if(!r[0] && !r[1] && !r[2] && !r[3]
+		&& !r[4] && !r[5] && !r[6] && r[7] == 0x80) {
+			printf(" all defaults");
+		}
+		printf("\n");
+	}
+
+	if(nxsty) decode_xsty(d, tag, xstyoffs, nxsty, xstysize);
+	printf("\n");
+}
+
+// Revision 10: one class index table and one record array holding both
+// record shapes, addressed in four-byte granules.
+
+static void decode_usty_union(uint8_t *d, uint32_t size, uint8_t tag) {
+	uint8_t nclass, ngran, nxsty, xstysize;
+	uint32_t styidxoffs, recoffs, xstyoffs;
+	int i, g;
+
+	if(size < USTY_UNION_HDRSIZE) {
+		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
+		return;
+	}
+
+	nclass = d[1];
+	ngran = d[2];
+	nxsty = d[3];
+	xstysize = d[4];
+
+	// styidx, the array read on every style operation, always follows the
+	// fixed header; the other two bases are stated so the engine need not
+	// compute them at init. Cross-check them against the counts: a stale
+	// offset disagreeing with a count is exactly the inconsistency worth
+	// reporting here.
+	styidxoffs = USTY_UNION_HDRSIZE;
+	recoffs = get16(d + 6);
+	xstyoffs = get16(d + 8);
+
+	printf("nclass: %d  ngran: %d (%d bytes)  nxsty: %d",
+		nclass, ngran, ngran * USTY_GRANULE, nxsty);
+	if(nxsty) {
+		printf(" (%d bytes each)", xstysize);
+	} else if(!xstysize) {
+		printf(" (target has no body records)");
+	}
+	printf("\n");
+	printf("Offsets: styidx %u  rec %u  xsty %u\n",
+		styidxoffs, recoffs, xstyoffs);
+
+	if(recoffs != styidxoffs + nclass
+	|| xstyoffs != recoffs + ngran * USTY_GRANULE) {
+		printf("Warning: header offsets disagree with the record counts.\n");
+		return;
+	}
+	if(ngran > USTY_MAXGRAN) {
+		printf("Warning: %d granules, more than a class index byte can reach (%d).\n",
+			ngran, USTY_MAXGRAN);
+		return;
+	}
+
+	// The xsty record size is per-target, so it is read from the header
+	// rather than assumed: the c64's body record is 6 bytes, a target with
+	// no body records declares 0, and another 6502 platform could want a
+	// different palette shape. The granule is format-wide by contrast --
+	// it is reached by granule * 4, so the interpreter has to know it at
+	// assembly time.
+	if(nxsty && !xstysize) {
+		printf("Warning: %d body records declared with a record size of 0.\n", nxsty);
+		return;
+	}
+	if(xstyoffs + nxsty * xstysize > size) {
+		printf("Warning: table extends past the end of the chunk (%u bytes).\n", size);
+		return;
+	}
+
+	// Granules are 1-based; 0 is the "all defaults" sentinel, which has no
+	// stored record. Print it as "-" rather than as a granule, since there
+	// is nothing in the dump below for it to point at. "d" marks a class
+	// whose index byte has bit 7 set, meaning it reads geometry too.
+	printf("\nClass -> granule  (- = all defaults, d = div record):");
+	for(i = 0; i < nclass; i++) {
+		uint8_t ix = d[styidxoffs + i];
+		if(!(i % 8)) printf("\n  %04x:", i);
+		if(!ix) {
+			printf("    -");
+		} else {
+			printf(" %3d%c", ix & USTY_IDX_GRAN, (ix & USTY_IDX_DIV)? 'd' : ' ');
+			if((ix & USTY_IDX_GRAN) > ngran) printf("!");
+		}
+	}
+	printf("\n");
+
+	// Walk granules rather than records: the array has no self-describing
+	// structure, and which granule starts a record is a property of the
+	// classes pointing at it. Show what each granule is used as.
+	printf("\nrec (%d granules, %d bytes each):\n", ngran, USTY_GRANULE);
+	for(g = 1; g <= ngran; g++) {
+		uint8_t *r = d + recoffs + (g - 1) * USTY_GRANULE;
+		int isdiv = 0, isspan = 0;
+
+		for(i = 0; i < nclass; i++) {
+			uint8_t ix = d[styidxoffs + i];
+			if((ix & USTY_IDX_GRAN) != g) continue;
+			if(ix & USTY_IDX_DIV) isdiv = 1; else isspan = 1;
+		}
+
+		printf("  %3d:", g);
+		if(isdiv || isspan) {
+			printf(" on=");
+			put_style_bits(r[USTY_U_STYON]);
+			printf(" off=");
+			put_style_bits(r[USTY_U_STYOFF]);
+			if(r[USTY_U_FG] == 0x80) printf(" fg=inherit");
+			else printf(" fg=%02x", r[USTY_U_FG]);
+		}
+		if(isdiv) {
+			uint8_t fl = r[USTY_U_FLAGS];
+
+			printf("  mtop=%d mbottom=%d width=%d%s height=%d%s padleft=%d"
+				" float=%s align=%s",
+				r[USTY_U_MARGINS] >> 4, r[USTY_U_MARGINS] & 15,
+				r[USTY_U_WIDTH], (fl & USTY_UFL_RELW)? "%" : "",
+				r[USTY_U_HEIGHT], (fl & USTY_UFL_RELH)? "%" : "",
+				r[USTY_U_PADLEFT],
+				float_names[(fl & USTY_UFL_FLOAT) >> USTY_UFL_FLOAT_SHIFT],
+				align_names[(fl & USTY_UFL_ALIGN) >> USTY_UFL_ALIGN_SHIFT]);
+			if(fl & USTY_UFL_EXTEND) printf(" EXTENDED");
+			g++;    // a div record owns the following granule too
+		}
+		if(isdiv && isspan) printf("   (shared with a span class)");
+		if(!isdiv && !isspan) {
+			printf("  %02x %02x %02x %02x   (unreferenced)",
+				r[0], r[1], r[2], r[3]);
+		}
+		printf("\n");
+	}
+
+	if(nxsty) decode_xsty(d, tag, xstyoffs, nxsty, xstysize);
+	printf("\n");
+}
+
 void decode_usty(struct chunk *ch) {
 	uint8_t *d = ch->data;
 	uint32_t size = ch->size;
-	uint8_t tag, nclass, ngeo, nsty, nxsty, xstysize;
-	uint32_t geoidxoffs, styidxoffs, styoffs, geooffs, xstyoffs;
-	int i;
-	uint8_t fg;
+	uint8_t tag;
 
-	if(size < 5) {
+	if(size < 4) {
 		printf("Chunk too small (%u bytes) to be a USTY table.\n", size);
 		return;
 	}
 
 	tag = d[0];
-	nclass = d[1];
-	ngeo = d[2];
-	nsty = d[3];
-	nxsty = d[4];
-	xstysize = d[5];
 
 	printf("Tag: %02x (", tag);
 	switch(tag & 0xf0) {
@@ -236,150 +489,21 @@ void decode_usty(struct chunk *ch) {
 	}
 	printf(", format version %d)\n", tag & 0x0f);
 
-	// The layout below is revision 8's. An older or newer table has a
-	// different header, so say so rather than misparsing it into a bounds
-	// complaint -- this is the mismatch the tag byte exists to catch.
-	if((tag & 0x0f) != USTY_VERSION) {
-		printf("Cannot decode USTY format version %d; this aamshow knows version %d.\n",
-			tag & 0x0f, USTY_VERSION);
-		return;
+	// The two revisions have different headers, so dispatch on the tag
+	// rather than misparsing one as the other -- this is the mismatch the
+	// tag byte exists to catch.
+	switch(tag & 0x0f) {
+	case USTY_VERSION_FLAT:
+		decode_usty_flat(d, size, tag);
+		break;
+	case USTY_VERSION_UNION:
+		decode_usty_union(d, size, tag);
+		break;
+	default:
+		printf("Cannot decode USTY format version %d; this aamshow knows %d and %d.\n",
+			tag & 0x0f, USTY_VERSION_UNION, USTY_VERSION_FLAT);
+		break;
 	}
-
-	if(size < USTY_HDRSIZE) {
-		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
-		return;
-	}
-
-	// styidx, the hottest array, always follows the fixed header; the other
-	// four bases are stated by the header so an engine can copy just a hot
-	// prefix and read the rest from the story file. Cross-check them
-	// against the counts: a stale offset disagreeing with a count is
-	// exactly the inconsistency worth reporting here.
-	styidxoffs = USTY_HDRSIZE;
-	styoffs = get16(d + 6);
-	geoidxoffs = get16(d + 8);
-	geooffs = get16(d + 10);
-	xstyoffs = get16(d + 12);
-
-	printf("nclass: %d  ngeo: %d  nsty: %d  nxsty: %d",
-		nclass, ngeo, nsty, nxsty);
-	if(nxsty) {
-		printf(" (%d bytes each)", xstysize);
-	} else if(!xstysize) {
-		printf(" (target has no body records)");
-	}
-	printf("\n");
-	printf("Offsets: styidx %u  sty %u  geoidx %u  geo %u  xsty %u\n",
-		styidxoffs, styoffs, geoidxoffs, geooffs, xstyoffs);
-
-	if(styoffs != styidxoffs + nclass
-	|| geoidxoffs != styoffs + nsty * USTY_STY_SIZE
-	|| geooffs != geoidxoffs + nclass
-	|| xstyoffs != geooffs + ngeo * USTY_GEO_SIZE) {
-		printf("Warning: header offsets disagree with the record counts.\n");
-		return;
-	}
-
-	// The xsty record size is per-target, so it is read from the header
-	// rather than assumed: the c64's body record is 6 bytes, a target with
-	// no body records declares 0, and another 6502 platform could want a
-	// different palette shape. geo and sty sizes are format-wide by
-	// contrast -- they are reached by slot * recsize, so the interpreter
-	// has to know them at assembly time.
-	if(nxsty && !xstysize) {
-		printf("Warning: %d body records declared with a record size of 0.\n", nxsty);
-		return;
-	}
-	if(xstyoffs + nxsty * xstysize > size) {
-		printf("Warning: table extends past the end of the chunk (%u bytes).\n", size);
-		return;
-	}
-
-	// Slot numbers are 1-based; 0 is the "all defaults" sentinel, which has
-	// no stored record. Print it as "-" rather than as a slot, since there
-	// is nothing in the dumps below for it to point at.
-	printf("\nClass -> geo slot / sty slot  (- = all defaults):");
-	for(i = 0; i < nclass; i++) {
-		uint8_t g = d[geoidxoffs + i], st = d[styidxoffs + i];
-		if(!(i % 8)) printf("\n  %04x: ", i);
-		if(g) printf(" %02x/", g); else printf("  -/");
-		if(st) printf("%02x", st); else printf(" -");
-		if(g > ngeo || st > nsty) printf("!");
-	}
-	printf("\n");
-
-	printf("\nsty (%d records, 4 bytes each; slot 0 is the sentinel):\n", nsty);
-	for(i = 0; i < nsty; i++) {
-		uint8_t *s = d + styoffs + i * 4;
-
-		fg = s[2];
-		printf("  %02x: on=", i + 1);
-		put_style_bits(s[0]);
-		printf("  off=");
-		put_style_bits(s[1]);
-		if(fg == 0x80) {
-			printf("  fg=inherit");
-		} else {
-			printf("  fg=%02x", fg);
-		}
-		printf("\n");
-	}
-
-	printf("\ngeo (%d records, 8 bytes each; slot 0 is the sentinel):\n", ngeo);
-	for(i = 0; i < ngeo; i++) {
-		uint8_t *g = d + geooffs + i * 8;
-		uint8_t fl = g[7];
-
-		printf("  %02x: mtop=%d mbottom=%d padleft=%d width=%d%s height=%d%s float=%s align=%s\n",
-			i + 1,
-			g[0], g[1], g[2], g[3],
-			(fl & 0x01)? "%" : "",
-			g[4],
-			(fl & 0x02)? "%" : "",
-			(g[5] <= 3)? float_names[g[5]] : "?",
-			(g[6] <= 3)? align_names[g[6]] : "?");
-	}
-
-	if(nxsty) {
-		// Body records: background, border, then eight palette entries
-		// indexed by the low three style bits. All ten are always present;
-		// the bundler resolves undeclared ones to the frontend's defaults.
-		static const char *palnames[8] = {
-			"-", "R", "B", "BR", "I", "IR", "BI", "BIR"
-		};
-
-		// Only byte 0 (the class index SET_BODY scans for) is common to
-		// every target. The rest of the record is the frontend's palette,
-		// so the field-by-field dump below is c64-shaped; another 6502
-		// platform with a different palette gets a hex dump rather than a
-		// confident misreading of its bytes.
-		int c64shape = (tag & 0xf0) == 0x10 && xstysize == 6;
-
-		printf("\nxsty (%d body records, %d bytes each):\n", nxsty, xstysize);
-		if(c64shape) {
-			printf("  palette index = reverse | bold << 1 | italic << 2"
-				"  (B=bold I=italic R=reverse)\n");
-		}
-		for(i = 0; i < nxsty; i++) {
-			uint8_t *x = d + xstyoffs + i * xstysize;
-			int j;
-
-			if(!c64shape) {
-				printf("  %02x: class=%-3d payload:", i, x[0]);
-				for(j = 1; j < xstysize; j++) printf(" %02x", x[j]);
-				printf("   (unknown body-record shape)\n");
-				continue;
-			}
-			printf("  %02x: class=%-3d background=%x border=%x\n      palette:",
-				i, x[0], x[1] & 15, x[1] >> 4);
-			for(j = 0; j < 8; j++) {
-				printf(" [%s]=%x", palnames[j],
-					(j & 1)? x[2 + j / 2] >> 4 : x[2 + j / 2] & 15);
-			}
-			printf("\n");
-		}
-	}
-	printf("\n");
 }
 
 static int put_obj(struct chunk *tagsch, int num) {
@@ -1209,7 +1333,15 @@ int main(int argc, char **argv) {
 
 	actual_crc = 0xffffffff;
 	if(!savefile) {
-		crc_chunk("LOOK");
+		// A story bundled for a 6502 target has had LOOK replaced by the
+		// precomputed USTY table, so its absence is not a defect there. (The
+		// CRC will not match HEAD either way once chunks have been rewritten
+		// -- dropping FILE chunks already saw to that.)
+		if(findchunk("USTY")) {
+			crc_chunk("USTY");
+		} else {
+			crc_chunk("LOOK");
+		}
 		crc_chunk("LANG");
 		crc_chunk("MAPS");
 		crc_chunk("DICT");

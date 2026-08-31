@@ -21,16 +21,17 @@
 // absolute only, fractional units truncated.
 // ============================================================================
 
-#define STY_VERSION	USTY_VERSION
-#define STY_TAG_AAMBOX  (0x00 | STY_VERSION)
-#define STY_TAG_C64     (0x10 | STY_VERSION)
-#define STY_TAG_APPLE2  (0x20 | STY_VERSION)
+// The high nibble of the tag byte names the target, the low nibble the
+// format revision. The revision is OR'd in by whichever builder ran, so the
+// two layouts cannot be confused for each other on the way in.
+#define STY_TAG_AAMBOX  0x00
+#define STY_TAG_C64     0x10
+#define STY_TAG_APPLE2  0x20
 
-// The per-class index tables hold slot numbers, 1-based: slot 0 is the
-// "all defaults" sentinel and has no stored record, so the counts below are
-// counts of real records and the index byte is the only limit.
-#define STY_MAXGEO	255
-#define STY_MAXSTY	255
+// Revision 11 (the flat per-class array) is what the 6502 engine reads. Set
+// this to 0 to emit revision 9's deduplicating layout instead; that builder
+// is kept compiled and working, and aamshow decodes both.
+#define USTY_EMIT_FLAT  1
 
 #define STY_RELW  0x01
 #define STY_RELH  0x02
@@ -44,8 +45,6 @@
 // frontend has a different palette shape declares its own; one with no body
 // records at all declares 0.
 #define XSTY_SIZE_C64 6
-
-#define STY_HDRSIZE USTY_HDRSIZE
 
 // A body record's six colors, in xsty nibble order. Only declarations that
 // name the target explicitly (-iftf-c64-background-color and friends) fill
@@ -105,6 +104,14 @@ struct sty_target {
 	                        // the *packing* below is c64-shaped: a target with
 	                        // a different palette needs its own packer, not
 	                        // just a different size here.
+	// Whether the target's interpreter still carries a style sheet parser.
+	// The c64 and apple2 builds define NO_CSS_PARSER and drop it (802 bytes
+	// of engine.s), so for them a USTY table is not an optimization but a
+	// requirement: a disk shipped without one would boot to a story with no
+	// style table at all. aambox keeps both paths, because the test suite
+	// hands it raw .aastory files that have never been through here.
+	int usty_required;
+
 	// Screen size in character cells, for range-checking absolute lengths.
 	// mincols/maxcols bracket the machine's real text widths: the c64 is a
 	// fixed 40; the apple2 is 40 or 80 depending on the card present, and
@@ -128,15 +135,15 @@ struct sty_target {
 //   aambox  io_mstyle is a bare rts (aambox_frontend.s:221). Nothing.
 
 static const struct sty_target sty_aambox = {
-	"aambox", STY_TAG_AAMBOX, 0, 0, 0, 0, 80, 80, 20
+	"aambox", STY_TAG_AAMBOX, 0, 0, 0, 0, 0, 80, 80, 20
 };
 static const struct sty_target sty_c64 = {
 	"c64", STY_TAG_C64, 1,
 	AASTYLE_REVERSE | AASTYLE_BOLD | AASTYLE_ITALIC, c64_bodydef, XSTY_SIZE_C64,
-	40, 40, 20
+	1, 40, 40, 20
 };
 static const struct sty_target sty_apple2 = {
-	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0, 0, 40, 80, 20
+	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0, 0, 1, 40, 80, 20
 };
 
 static const struct sty_target *sty_target;
@@ -339,15 +346,20 @@ static int parse_length(const char *v, int *val, int *unit, int *flags) {
 	int frac = 0;
 
 	*flags = 0;
-	if(*v == '.') {             // ".3em" is 0.3em on the web
-		frac = 1;
-		v++;
+	if(*v == '.') {
+		// ".3em" is 0.3em on the web, so there is no integer part to
+		// accumulate -- the digits after the dot are the fractional part
+		// and get dropped below. Reading them as the integer part turned
+		// "margin-top:.3em" into three blank rows.
+		if(v[1] < '0' || v[1] > '9') return 0;
+	} else {
+		if(*v < '0' || *v > '9') return 0;
+		while(*v >= '0' && *v <= '9') {
+			if(n < 1000000) n = n * 10 + (*v - '0');
+			v++;
+		}
 	}
-	if(*v < '0' || *v > '9') return 0;
-	while(*v >= '0' && *v <= '9') {
-		if(n < 1000000) n = n * 10 + (*v - '0');
-		v++;
-	}
+	// Truncated, not rounded, which is what css_abs_rel in engine.s does.
 	while(*v == '.') {
 		frac = 1;
 		v++;
@@ -612,25 +624,47 @@ static void parse_decl(styclass *c, const char *p, int len) {
 	// says so with -iftf-c64-background-color.
 }
 
-// Build the two record types, in the exact byte order the 6502 engine
-// indexes them by (see STYLE_SPEC.md).
+// A revision 11 record: everything about one class in eight bytes, laid out
+// in engine.s's STY_* order so that stybase + class * 8 keeps working and
+// none of the engine's read sites move.
+//
+// Two properties the CSS parsers understand do not fit and are dropped
+// here, which build_usty_flat() warns about: padding/margin-left has no
+// byte left, and "margin: auto" centering has no flags encoding -- $c0
+// would read as a right float to the engine's cpx #STYF_FLOATR test, which
+// is worse than ignoring it. Neither is rendered by any 6502 frontend
+// today, and the engine's own parser has always ignored both, so a story
+// bundled with USTY looks exactly like the same story bundled without it.
 
-static void make_geo(uint8_t *g, const styclass *c) {
-	g[0] = c->mtop;
-	g[1] = c->mbottom;
-	g[2] = c->padleft;
-	g[3] = c->width;
-	g[4] = c->height;
-	g[5] = c->flo;
-	g[6] = c->align;
-	g[7] = c->flags;
+static void make_flat(uint8_t *r, const styclass *c) {
+	uint8_t flags = c->flags & (USTY_FL_RELW | USTY_FL_RELH);
+
+	if(c->flo == 1) flags |= USTY_FL_FLOATL;
+	else if(c->flo == 2) flags |= USTY_FL_FLOATR;
+	flags |= (c->align & 3) << USTY_FL_ALIGN_SHIFT;
+
+	r[USTY_F_WIDTH] = c->width;
+	r[USTY_F_HEIGHT] = c->height;
+	r[USTY_F_MTOP] = c->mtop;
+	r[USTY_F_MBOTTOM] = c->mbottom;
+	r[USTY_F_STYON] = c->styon & sty_target->stymask;
+	r[USTY_F_STYOFF] = c->styoff & sty_target->stymask;
+	r[USTY_F_FLAGS] = flags;
+	r[USTY_F_FG] = c->fg;
 }
 
-static void make_sty(uint8_t *s, const styclass *c) {
-	s[0] = c->styon & sty_target->stymask;
-	s[1] = c->styoff & sty_target->stymask;
-	s[2] = c->fg;
-	s[3] = 0;
+// Body records are keyed on the raw class index because SET_BODY takes a
+// class operand, and they are identical in both revisions.
+
+static void make_xsty(uint8_t *x, int classidx, const styclass *c) {
+	int j;
+
+	x[0] = classidx;
+	x[1] = c->body[BODY_BG] | (c->body[BODY_BORDER] << 4);
+	for(j = 0; j < 4; j++) {
+		x[2 + j] = c->body[BODY_PAL + j * 2]
+			| (c->body[BODY_PAL + j * 2 + 1] << 4);
+	}
 }
 
 // Add rec to a record pool unless an identical record is already in it.
@@ -711,133 +745,153 @@ static styclass *parse_look(int *nclassp) {
 }
 
 // ----------------------------------------------------------------------------
-// Slot construction: dedupe the geo and sty records independently, and
-// collect xsty (body-style) records.
+// Revision 10: one class index table and one record array holding both
+// record shapes, addressed in four-byte granules.
 //
-// The two arrays are deduped separately because they are read at different
-// times and dedupe very differently: geo keys are nearly all distinct
-// (margins and text-align make them unique), while sty keys collapse hard
-// (forensic: 37 classes, 14 geo records, 9 sty records). A joint slot made
-// the sty array carry a duplicate for every distinct geometry.
+// Revisions 2-9 kept style and geometry in separate pools with an index
+// table each, on the theory that a joint record would make the style array
+// carry a duplicate per distinct geometry. Counting the distinct
+// (style, geometry) pairs directly showed that inflation is zero in five of
+// the six story/target pairs measured and two records in the sixth: geometry
+// already separates nearly every class that has any, so adding style to the
+// key splits almost nothing. What killed the earlier attempt was the record
+// size, not the pairing -- squeezed from 12 bytes to 8 the merge costs
+// nothing per record and buys back a whole index table plus the separate
+// style array.
 //
-// The per-class index tables hold 1-based slot numbers. Slot 0 is the
-// "all defaults" sentinel and is stored in neither array, so a class that
-// sets nothing costs no record: the engine sees 0 and branches straight to
-// the path it already takes for a default record, skipping both the
-// slot * recsize computation and the record read.
+// Granules rather than record numbers because div and span records would
+// otherwise need two shift counts, and a 6502 that cannot self-modify
+// (engine.s:5) then needs two copies of the pointer arithmetic. One "* 4"
+// serves both shapes, so one subroutine serves every read site.
 //
-// Slot numbers rather than byte offsets because the offsets capped the
-// arrays at 32 geo and 64 sty records, and while no story measured so far
-// comes near that, none of them styles for the c64 either -- nsty is small
-// today mostly because the fg field is unused. A masked c64 sty record is
-// styon(8) x styoff(8) x fg(17), so a story that actually writes c64 styles
-// can pass 64 without being exotic. The cost is a slot * recsize shift
-// chain at each read site, which the sentinel skips for the common case.
+// Index 0 is the "all defaults" sentinel and is stored nowhere: real
+// granules are numbered from 1 and granule n lives at (n - 1) * 4, which
+// the engine gets by biasing its base pointer down one granule at init.
 //
-// The records stay padded to 8 and 4 bytes even though the offsets that
-// motivated the padding are gone: the shift chain wants a power of two.
-//
-// xsty holds body records, the one thing that genuinely cannot live in a
-// slot: SET_BODY rewrites the frontend's whole style palette plus the
-// screen and border registers, which is five bytes of payload against
-// sty's one spare byte. They stay keyed on the raw class index because
-// SET_BODY takes a class operand. The array is scanned, not indexed, so
-// the record size need not be a power of two.
-//
-// A class earns a body record only by naming the target explicitly
-// (-iftf-c64-background-color and friends). Deriving them from plain
-// background-color/border was wrong in every story measured: those
-// declarations sit on decorative inline divs that SET_BODY never sees,
-// while the real body classes carry nothing but CSS custom properties.
+// See STYLE_SPEC.md for the full rationale and the measurements.
+
+static int has_geometry(const styclass *c) {
+	return c->mtop || c->mbottom || c->width || c->height
+		|| c->flo || c->align || c->padleft || c->flags;
+}
+
+// Both shapes begin with the same three style bytes. That is a correctness
+// constraint, not a convenience: a style read never learns which shape it
+// got, so a span-only class can point at the front of a div record only
+// because the prefix means the same thing in both.
+
+static void make_span(uint8_t *s, const styclass *c) {
+	s[USTY_U_STYON] = c->styon & sty_target->stymask;
+	s[USTY_U_STYOFF] = c->styoff & sty_target->stymask;
+	s[USTY_U_FG] = c->fg;
+	s[3] = 0;               // never read; 0 so records dedup
+}
+
+static void make_div(uint8_t *d, const styclass *c, int classidx) {
+	uint8_t mtop = c->mtop, mbottom = c->mbottom;
+
+	// One nibble each. The corpus maxima are 3 and 2 rows against a 24-row
+	// screen, so this clamps nothing today, but a cap that wraps silently
+	// would be a trap.
+	if(mtop > USTY_MARGIN_MAX || mbottom > USTY_MARGIN_MAX) {
+		warning(WARN_STYLE,
+			"Style class %d has a margin of %d rows, more than a USTY "
+			"record can hold (limit %d); it was clamped.",
+			classidx, (mtop > mbottom)? mtop : mbottom, USTY_MARGIN_MAX);
+		if(mtop > USTY_MARGIN_MAX) mtop = USTY_MARGIN_MAX;
+		if(mbottom > USTY_MARGIN_MAX) mbottom = USTY_MARGIN_MAX;
+	}
+
+	make_span(d, c);        // the shared three-byte prefix
+	d[USTY_U_FLAGS] =
+		(c->flags & (USTY_UFL_RELW | USTY_UFL_RELH))
+		| ((c->flo & 3) << USTY_UFL_FLOAT_SHIFT)
+		| ((c->align & 3) << USTY_UFL_ALIGN_SHIFT);
+	d[USTY_U_MARGINS] = (mtop << 4) | mbottom;
+	d[USTY_U_WIDTH] = c->width;
+	d[USTY_U_HEIGHT] = c->height;
+	d[USTY_U_PADLEFT] = c->padleft;
+}
 
 static uint8_t *build_usty(uint32_t *sizep) {
 	styclass *cls;
 	int nclass;
-	uint8_t geo[STY_MAXGEO * USTY_GEO_SIZE], sty[STY_MAXSTY * USTY_STY_SIZE];
-	int ngeo = 0, nsty = 0;         // real records; slot 0 is the sentinel
-	uint8_t geoidx[256], styidx[256];
+	uint8_t rec[USTY_MAXGRAN * USTY_GRANULE];
+	int ngran = 0;                  // granules placed so far
+	uint8_t styidx[256];
+	uint8_t divrec[256 * USTY_DIV_SIZE];
+	int divgran[256];               // granule each interned div landed on
+	int ndiv = 0;
 	uint8_t xsty[256 * USTY_XSTY_MAXSIZE];
 	int nxsty = 0;
 	uint8_t *out;
-	uint32_t size, geoidxoffs, styidxoffs, styoffs, geooffs, xstyoffs;
-	int i;
-
-	// The sentinel records. A class matching one of these interns to slot
-	// 0, which is stored in neither array: the engine branches straight to
-	// the path it already takes for an all-default record, skipping both
-	// the slot * recsize computation and the record read.
-	static const uint8_t geodflt[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-	static const uint8_t stydflt[4] = {0, 0, NOCOLOR, 0};
+	uint32_t size, styidxoffs, recoffs, xstyoffs;
+	int i, g;
 
 	cls = parse_look(&nclass);
 	if(!cls) return 0;
 
+	// Divs first, so that the span pass below has every div prefix to
+	// point at. Each distinct div record takes two granules.
 	for(i = 0; i < nclass; i++) {
-		uint8_t g[8], s[4];
-		int gs, ss, j;
+		uint8_t d[USTY_DIV_SIZE];
+		int slot, before;
 
-		make_geo(g, &cls[i]);
-		make_sty(s, &cls[i]);
+		if(!has_geometry(&cls[i])) continue;
 
-		// Slots are 1-based so that 0 can be the sentinel; the record for
-		// slot n lives at (n - 1) * recsize, which the engine reaches by
-		// biasing its base pointer down one record.
-		gs = memcmp(g, geodflt, 8)? intern(geo, &ngeo, STY_MAXGEO, g, 8) : -2;
-		ss = memcmp(s, stydflt, 4)? intern(sty, &nsty, STY_MAXSTY, s, 4) : -2;
-		if(gs == -1 || ss == -1) {
-			warning(WARN_STYLE,
-				"Story has more distinct %s styles than a USTY table can hold "
-				"(limit %d); the interpreter will parse the style sheet at "
-				"startup instead.",
-				(gs == -1)? "layout" : "text",
-				(gs == -1)? STY_MAXGEO : STY_MAXSTY);
-			free(cls);
-			return 0;
+		make_div(d, &cls[i], i);
+		before = ndiv;
+		slot = intern(divrec, &ndiv, 256, d, USTY_DIV_SIZE);
+		if(slot < 0) goto toobig;
+		if(slot == before) {
+			// Newly interned, so it needs granules of its own.
+			if(ngran + 2 > USTY_MAXGRAN) goto toobig;
+			memcpy(rec + ngran * USTY_GRANULE, d, USTY_DIV_SIZE);
+			divgran[slot] = ngran + 1;
+			ngran += 2;
 		}
-		geoidx[i] = (gs == -2)? 0 : gs + 1;     // -2 = default -> slot 0
-		styidx[i] = (ss == -2)? 0 : ss + 1;
+		styidx[i] = USTY_IDX_DIV | divgran[slot];
+	}
 
-		// Body records, keyed on the raw class index because SET_BODY
-		// takes a class operand and this data is deliberately outside the
-		// slot dedup key. Two nibbles per byte; all six fields are always
-		// present, the undeclared ones resolved to the target's defaults.
+	// Then the span-only classes. A span read takes three bytes from
+	// wherever it points and never learns what shape it landed in, so any
+	// granule boundary whose first three bytes match will do -- including
+	// the front of a div record, which is where sharing comes from. The
+	// scan below covers div granules and already-placed spans alike.
+	for(i = 0; i < nclass; i++) {
+		uint8_t s[USTY_SPAN_SIZE];
+		static const uint8_t spandflt[USTY_SPAN_SIZE] = {0, 0, NOCOLOR, 0};
+
+		if(has_geometry(&cls[i])) continue;
+
+		make_span(s, &cls[i]);
+		if(!memcmp(s, spandflt, USTY_SPAN_SIZE)) {
+			styidx[i] = 0;  // all defaults: no record at all
+			continue;
+		}
+		for(g = 1; g <= ngran; g++) {
+			if(!memcmp(rec + (g - 1) * USTY_GRANULE, s, 3)) break;
+		}
+		if(g > ngran) {
+			if(ngran + 1 > USTY_MAXGRAN) goto toobig;
+			memcpy(rec + ngran * USTY_GRANULE, s, USTY_SPAN_SIZE);
+			g = ++ngran;
+		}
+		styidx[i] = g;
+	}
+
+	// Body records, keyed on the raw class index because SET_BODY takes a
+	// class operand and this data is deliberately outside the record dedup.
+	for(i = 0; i < nclass; i++) {
 		if(cls[i].hasbody) {
-			uint8_t *x = xsty + nxsty * sty_target->xstysize;
-			x[0] = i;
-			x[1] = cls[i].body[BODY_BG] | (cls[i].body[BODY_BORDER] << 4);
-			for(j = 0; j < 4; j++) {
-				x[2 + j] = cls[i].body[BODY_PAL + j * 2]
-					| (cls[i].body[BODY_PAL + j * 2 + 1] << 4);
-			}
+			make_xsty(xsty + nxsty * sty_target->xstysize, i, &cls[i]);
 			nxsty++;
 		}
 	}
 
-	// Chunk layout: a fixed header, then the arrays in descending order of
-	// how often the engine reads them.
-	//
-	//   styidx, sty   read on every span enter/leave, via unstyle folding
-	//                 the whole div stack (engine.s:532)
-	//   geoidx, geo   read at div enter/leave only
-	//   xsty          read at SET_BODY only, and is empty in every story
-	//                 measured so far
-	//
-	// geoidx is cold -- it is the class -> slot table for geo, not for sty --
-	// so it belongs after the hot pair rather than ahead of it. That puts
-	// styidx at the fixed header offset, so the hottest pointer is
-	// base + STY_HDRSIZE with no header read at all.
-	//
-	// The header states the four remaining array offsets outright. They are
-	// derivable from the counts, but stating them decouples the layout from
-	// the record sizes and names the copy boundaries: an engine can copy
-	// [0, geoidx_offset) to keep only the hot pair in the heap, or
-	// [0, geo_offset) to keep every index table resident and read the bulky
-	// geo array from the story file through readdata.
-	styidxoffs = STY_HDRSIZE;
-	styoffs = styidxoffs + nclass;
-	geoidxoffs = styoffs + nsty * USTY_STY_SIZE;
-	geooffs = geoidxoffs + nclass;
-	xstyoffs = geooffs + ngeo * USTY_GEO_SIZE;
+	styidxoffs = USTY_UNION_HDRSIZE;
+	recoffs = styidxoffs + nclass;
+	xstyoffs = recoffs + ngran * USTY_GRANULE;
 	size = xstyoffs + nxsty * sty_target->xstysize;
 	out = malloc(size);
 	if(!out) {
@@ -845,21 +899,103 @@ static uint8_t *build_usty(uint32_t *sizep) {
 		exit(1);
 	}
 
-	out[0] = sty_target->tag;
+	out[0] = sty_target->tag | USTY_VERSION_UNION;
 	out[1] = nclass;
-	out[2] = ngeo;
-	out[3] = nsty;
-	out[4] = nxsty;
-	out[5] = sty_target->xstysize;  // per-target body record stride
-	put16(out + 6, styoffs);
-	put16(out + 8, geoidxoffs);
-	put16(out + 10, geooffs);
-	put16(out + 12, xstyoffs);
+	out[2] = ngran;
+	out[3] = nxsty;
+	out[4] = sty_target->xstysize;  // per-target body record stride
+	out[5] = 0;
+	// styidx always follows the fixed header, so the engine's hottest base
+	// pointer needs no header read. The other two follow from the counts,
+	// but stating them saves the engine that arithmetic at init.
+	put16(out + 6, recoffs);
+	put16(out + 8, xstyoffs);
 	memcpy(out + styidxoffs, styidx, nclass);
-	memcpy(out + styoffs, sty, nsty * USTY_STY_SIZE);
-	memcpy(out + geoidxoffs, geoidx, nclass);
-	memcpy(out + geooffs, geo, ngeo * USTY_GEO_SIZE);
+	memcpy(out + recoffs, rec, ngran * USTY_GRANULE);
 	memcpy(out + xstyoffs, xsty, nxsty * sty_target->xstysize);
+
+	free(cls);
+	*sizep = size;
+	return out;
+
+toobig:
+	warning(WARN_STYLE,
+		"Story needs more than %d style granules, more than a USTY record "
+		"array can address; the interpreter will parse the style sheet at "
+		"startup instead.",
+		USTY_MAXGRAN);
+	free(cls);
+	return 0;
+}
+
+// Revision 11: one 8-byte record per class, no dedup, no index table.
+//
+// Bigger than revision 9 on a story whose classes repeat, smaller on one
+// whose classes are mostly distinct, and much simpler for the engine: the
+// record for class n is at stybase + n * 8, which is the addressing
+// engine.s already used for the table it built by parsing CSS. So the
+// engine reads this by allocating nclass * 8 bytes and blitting, and the
+// CSS parser goes away.
+//
+// The header states no offsets. The records begin at a fixed offset and the
+// body records begin immediately after them, which the 6502 gets for free:
+// readdata advances virdata past what it read, so the pointer is already
+// where the xsty scan wants to start.
+
+static uint8_t *build_usty_flat(uint32_t *sizep) {
+	styclass *cls;
+	int nclass;
+	uint8_t *out;
+	uint32_t size, recoffs, xstyoffs;
+	int nxsty = 0, npadleft = 0, nauto = 0;
+	int i;
+
+	cls = parse_look(&nclass);
+	if(!cls) return 0;
+
+	recoffs = USTY_FLAT_HDRSIZE;
+	xstyoffs = recoffs + nclass * USTY_FLAT_RECSIZE;
+	size = xstyoffs;
+	for(i = 0; i < nclass; i++) {
+		if(cls[i].hasbody) size += sty_target->xstysize;
+	}
+	out = malloc(size);
+	if(!out) {
+		fprintf(stderr, "Out of memory.\n");
+		exit(1);
+	}
+
+	out[0] = sty_target->tag | USTY_VERSION_FLAT;
+	out[1] = nclass;
+	out[3] = sty_target->xstysize;  // per-target body record stride
+
+	for(i = 0; i < nclass; i++) {
+		make_flat(out + recoffs + i * USTY_FLAT_RECSIZE, &cls[i]);
+		if(cls[i].padleft) npadleft++;
+		if(cls[i].flo == 3) nauto++;
+		if(cls[i].hasbody) {
+			make_xsty(out + xstyoffs + nxsty * sty_target->xstysize,
+				i, &cls[i]);
+			nxsty++;
+		}
+	}
+	out[2] = nxsty;
+
+	// See make_flat(): these two are parsed but have nowhere to go in an
+	// eight-byte record. Say so once per story rather than once per class.
+	if(npadleft) {
+		warning(WARN_STYLE,
+			"%d style class%s set a left margin or padding, which a USTY "
+			"record has no room for; it was ignored, as the interpreter's "
+			"own style sheet parser ignores it.",
+			npadleft, (npadleft == 1)? "" : "es");
+	}
+	if(nauto) {
+		warning(WARN_STYLE,
+			"%d style class%s set \"margin: auto\", which a USTY record "
+			"cannot encode; the div will not be centered.",
+			nauto, (nauto == 1)? "" : "es");
+	}
 
 	free(cls);
 	*sizep = size;
@@ -868,6 +1004,23 @@ static uint8_t *build_usty(uint32_t *sizep) {
 
 // ----------------------------------------------------------------------------
 // Public API.
+
+// Called after rewrite_chunks(). On a target whose interpreter has no style
+// sheet parser, failing to build the table is fatal rather than a warning:
+// the alternative is a disk image that boots and then renders every div with
+// whatever the heap happened to contain. Both ways of getting here --
+// build_usty*() returning 0, and the story having no LOOK chunk for
+// rewrite_6502_sty() to key off -- land in the same place.
+
+void bundle_sty_check(void) {
+	if(sty_target && sty_target->usty_required && !sty_emitted) {
+		fprintf(stderr,
+			"Error: could not build the %s style table, and the %s "
+			"interpreter has no style sheet parser to fall back on.\n",
+			sty_target->name, sty_target->name);
+		exit(1);
+	}
+}
 
 void bundle_sty_set_target(const char *target) {
 	sty_target = 0;
@@ -895,19 +1048,23 @@ chunk_action_t rewrite_6502_sty(
 
 	if(act == CHUNK_DROP) return act;
 
-	// Insert the USTY chunk right after LOOK, whose payload it derives
-	// from. HEAD must remain the first chunk (the c64 loader copies block 0
-	// expecting HEAD), so we key off LOOK rather than the first chunk.
+	// USTY takes LOOK's place in the chunk order: it is derived from
+	// LOOK's payload and supersedes it, so shipping both would be dead
+	// weight in the disk image. If the table cannot be built the story
+	// keeps LOOK and the interpreter parses it at startup, which is why the
+	// engine still carries that parser.
 	if(sty_target && !sty_emitted && !strcmp(id, "LOOK")) {
 		if(!sty_payload) {
-			sty_payload = build_usty(&sty_size);
+			sty_payload = USTY_EMIT_FLAT
+				? build_usty_flat(&sty_size)
+				: build_usty(&sty_size);
 		}
 		if(sty_payload) {
 			memcpy(newid, "USTY", 4);
 			*newdata = sty_payload;
 			*newsize = sty_size;
 			sty_emitted = 1;
-			return CHUNK_INSERT;
+			return CHUNK_REPLACE;
 		}
 	}
 	return act;

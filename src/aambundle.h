@@ -7,7 +7,7 @@ typedef void (*chunk_visitor_t)(char *head, char *dirname, uint8_t *chunk, uint3
 extern uint8_t *story;
 extern uint32_t storysize;
 
-void visit_chunks(char *storyname, int storynamesize, file_visitor_t file_visitor);
+void visit_chunks(char *storyname, int storynamesize, chunk_visitor_t chunk_visitor);
 
 /* Locate a chunk in the story, returning its payload and (if sizep is
  * non-null) its size, or null if the story has no such chunk.
@@ -90,6 +90,16 @@ chunk_action_t rewrite_6502(
  * the USTY chunk inserted right after LOOK. */
 
 void bundle_sty_set_target(const char *target);
+
+/* Call after rewrite_chunks() on a 6502 target: aborts if the interpreter
+ * needs a USTY table and none was emitted. See bundle_sty.c.
+ */
+void bundle_sty_check(void);
+
+/* Writes the rewritten story file, with no packaging around it, for the
+ * aambox test platform. See bundle_6502.c.
+ */
+void bundle_aambox(char *filename);
 chunk_action_t rewrite_6502_sty(
 	const char *id,
 	uint8_t *data,
@@ -99,7 +109,6 @@ chunk_action_t rewrite_6502_sty(
 	uint32_t *newsize);
 
 /* main bundle routines */
->>>>>>> 0acaf1e (aambundle: refactor chunk rewriting, added codepoint warnings)
 
 uint8_t *unicode_to_utf8(const uint32_t unichar);
 void warn_about_nonascii(uint8_t *dict, uint32_t dictsize, uint8_t *lang, uint32_t langsize);
