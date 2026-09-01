@@ -804,7 +804,7 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 	}
 	out = malloc(size);
 	if(!out) {
-		fprintf(stderr, "Out of memory.\n");
+		warning(WARN_ERROR, "Out of memory");
 		exit(1);
 	}
 
@@ -857,10 +857,9 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 
 void bundle_sty_check(void) {
 	if(sty_target && sty_target->usty_required && !sty_emitted) {
-		fprintf(stderr,
-			"Error: could not build the %s style table, and the %s "
-			"interpreter has no style sheet parser to fall back on.\n",
-			sty_target->name, sty_target->name);
+		warning(WARN_ERROR,
+			"Could not build the %s style table.",
+			sty_target->name);
 		exit(1);
 	}
 }

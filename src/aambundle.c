@@ -23,7 +23,7 @@ static char *storyfile;
 // Keep usage() updated with new warnings; they only appear with --help-all.
 
 int charset_warning_level = WARN_DEFAULT;
-int keyboard_warning_level = WARN_DEFAULT;
+int input_warning_level = WARN_DEFAULT;
 int style_warning_level = WARN_DEFAULT;
 
 int nwarning;
@@ -43,8 +43,9 @@ static const struct {
 	const char *category;
 	int *level;
 } warn_info[WARN_COUNT] = {
+	{"error",    NULL},
 	{"charset",  &charset_warning_level},
-	{"keyboard", &keyboard_warning_level},
+	{"input",    &input_warning_level},
 	{"style",    &style_warning_level}
 };
 
@@ -55,14 +56,14 @@ void warning(warn_id_t id, const char *fmt, ...) {
 	// --no-warn-* really turns the warning off, not just the hint. The
 	// level variable defaults to WARN_DEFAULT; only --warn-* (WARN_ALWAYS)
 	// or --no-warn-* (WARN_NEVER) change it.
-	if(id < WARN_COUNT && *warn_info[id].level == WARN_NEVER) return;
+	if(id < WARN_COUNT && warn_info[id].level && *warn_info[id].level == WARN_NEVER) return;
 
 	va_start(ap, fmt);
 	vsnprintf(msg, sizeof(msg), fmt, ap);
 	va_end(ap);
 
-	fprintf(stderr, "%s %s\n", warnings_as_errors? "Error:" : "Warning:", msg);
-	if(id < WARN_COUNT && *warn_info[id].level != WARN_ALWAYS) {
+	fprintf(stderr, "%s %s\n", id==WARN_ERROR || warnings_as_errors ? "Error:" : "Warning:", msg);
+	if(id < WARN_COUNT && warn_info[id].level && *warn_info[id].level != WARN_ALWAYS) {
 		if(!(warned_mask & (1u << id))) {
 			fprintf(stderr, "(Use --no-warn-%s to disable %s warnings.)\n",
 				warn_info[id].category, warn_info[id].category);
@@ -227,7 +228,7 @@ void warn_about_nonascii(uint8_t *dict, uint32_t dictsize, uint8_t *lang, uint32
 					(lang[exttable+5*aachar+3] << 8) |
 					(lang[exttable+5*aachar+4])
 				);
-				fprintf(stderr, "Warning: Extended character %d (%s, U+%04x) found in dictionary word '%s'. This word will not be recognized in user input.\n",
+				warning(WARN_INPUT, "Extended character %d (%s, U+%04x) found in dictionary word '%s'. This word will not be recognized in user input.",
 					dict[j],
 					unicode_to_utf8(unichar),
 					unichar,
@@ -273,7 +274,7 @@ static void out_reserve(uint32_t n) {
 		outalloc = 2 * (outsize + n) + 0x1000;
 		out = realloc(out, outalloc);
 		if(!out) {
-			fprintf(stderr, "Out of memory.\n");
+			warning(WARN_ERROR, "Out of memory.");
 			exit(1);
 		}
 	}
@@ -449,8 +450,8 @@ void usage(char *prgname, int all) {
 		fprintf(stderr, "Warning options:\n");
 		fprintf(stderr, "--warn-charset          Always warn about codepoints the target cannot render.\n");
 		fprintf(stderr, "--no-warn-charset       Never warn about codepoints the target cannot render.\n");
-		fprintf(stderr, "--warn-keyboard         Always warn about words the target cannot type.\n");
-		fprintf(stderr, "--no-warn-keyboard      Never warn about words the target cannot type.\n");
+		fprintf(stderr, "--warn-input            Always warn about words the target cannot type.\n");
+		fprintf(stderr, "--no-warn-input         Never warn about words the target cannot type.\n");
 		fprintf(stderr, "--warn-style            Always warn about styles the target cannot precompute.\n");
 		fprintf(stderr, "--no-warn-style         Never warn about styles the target cannot precompute.\n");
 		fprintf(stderr, "--warnings-as-errors    Exit with a failure status if anything warned.\n");
@@ -476,8 +477,8 @@ int main(int argc, char **argv) {
 		{"target", 1, 0, 't'},
 		{"warn-charset", 0, &charset_warning_level, WARN_ALWAYS},
 		{"no-warn-charset", 0, &charset_warning_level, WARN_NEVER},
-		{"warn-keyboard", 0, &keyboard_warning_level, WARN_ALWAYS},
-		{"no-warn-keyboard", 0, &keyboard_warning_level, WARN_NEVER},
+		{"warn-input", 0, &input_warning_level, WARN_ALWAYS},
+		{"no-warn-input", 0, &input_warning_level, WARN_NEVER},
 		{"warn-style", 0, &style_warning_level, WARN_ALWAYS},
 		{"no-warn-style", 0, &style_warning_level, WARN_NEVER},
 		{"warnings-as-errors", 0, &warnings_as_errors, 1},
@@ -511,7 +512,7 @@ int main(int argc, char **argv) {
 				break;
 			default:
 				if(opt >= 0) {
-					fprintf(stderr, "Unimplemented option '%c'\n", opt);
+					warning(WARN_ERROR, "Unimplemented option '%c'", opt);
 					exit(1);
 				}
 				break;
@@ -529,7 +530,7 @@ int main(int argc, char **argv) {
 	&& strcmp(target, "c64")
 	&& strcmp(target, "apple2")
 	&& strcmp(target, "aambox")) {
-		fprintf(stderr, "Unsupported target \"%s\".\n", target);
+		warning(WARN_ERROR, "Unsupported target \"%s\".", target);
 		exit(1);
 	}
 
@@ -559,13 +560,13 @@ int main(int argc, char **argv) {
 
 	f = fopen(argv[optind], "rb");
 	if(!f) {
-		fprintf(stderr, "%s: %s\n", argv[optind], strerror(errno));
+		warning(WARN_ERROR, "%s: %s", argv[optind], strerror(errno));
 		exit(1);
 	}
 	if(12 != fread(buf, 1, 12, f)
 	|| memcmp(buf, "FORM", 4)
 	|| memcmp(buf + 8, "AAVM", 4)) {
-		fprintf(stderr, "Error: Bad or missing file header.\n");
+		warning(WARN_ERROR, "Bad or missing file header.");
 		exit(1);
 	}
 	storysize = 8 +
@@ -577,14 +578,14 @@ int main(int argc, char **argv) {
 
 	story = malloc(storysize + 0x108);
 	if(storysize != fread(story, 1, storysize, f)) {
-		fprintf(stderr, "Failed to read all of '%s': %s\n", argv[optind], strerror(errno));
+		warning(WARN_ERROR, "Failed to read all of '%s': %s", argv[optind], strerror(errno));
 		exit(1);
 	}
 
 	fclose(f);
 
 	if(story[20] > VER_MAJOR || (story[20] == VER_MAJOR && story[21] > VER_MINOR)) {
-		fprintf(stderr, "Unsupported story file version: %d.%d is more than %d.%d\n", story[20], story[21], VER_MAJOR, VER_MINOR);
+		warning(WARN_ERROR, "Unsupported story file version: %d.%d is more than %d.%d", story[20], story[21], VER_MAJOR, VER_MINOR);
 		exit(1);
 	}
 
@@ -594,7 +595,7 @@ int main(int argc, char **argv) {
 		bundle_aambox(dirname);
 	} else {
 		if(mkdir(dirname, 0777) && errno != EEXIST) {
-			fprintf(stderr, "%s: %s\n", dirname, strerror(errno));
+			warning(WARN_ERROR, "%s: %s", dirname, strerror(errno));
 			exit(1);
 		}
 		if(!strcmp(target, "web")) {

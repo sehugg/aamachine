@@ -178,7 +178,7 @@ void check_keyboard(const char *target_name, const char *untypeable) {
 	char buf[MAXREPORT * (MAXWORD * 4 + 4) + 8];
 	int nword, ntarget = 0, len, i, j, bad, nbad = 0, buflen = 0;
 
-	if(keyboard_warning_level == WARN_NEVER) {
+	if(input_warning_level == WARN_NEVER) {
 		return;
 	}
 
@@ -245,7 +245,7 @@ void check_keyboard(const char *target_name, const char *untypeable) {
 	}
 
 	warning(
-		WARN_KEYBOARD,
+		WARN_INPUT,
 		"%d of the story's %d object names contain characters that "
 		"cannot be typed on the %s keyboard, so the player can never "
 		"name them: %s%s",

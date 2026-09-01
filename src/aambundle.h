@@ -48,15 +48,16 @@ void rewrite_chunks(chunk_rewriter_t rewriter, int align_writ);
 #define WARN_NEVER	2
 
 extern int charset_warning_level;
-extern int keyboard_warning_level;
+extern int input_warning_level;
 extern int style_warning_level;
 extern int nwarning;
 
 /* One entry per warning kind; warn_info[] in aambundle.c maps a
  * warn_id_t to the flag that disables it and to its level variable. */
 typedef enum {
+	WARN_ERROR,
 	WARN_CHARSET,
-	WARN_KEYBOARD,
+	WARN_INPUT,
 	WARN_STYLE,
 	WARN_COUNT
 } warn_id_t;
