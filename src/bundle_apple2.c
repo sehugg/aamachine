@@ -879,7 +879,7 @@ void bundle_apple2(char *dirname) {
 	writefile(dirname, "AAM.SYSTEM", table_a2terp, sizeof(table_a2terp));
 	/* The interpreter reads STORY a page at a time, so round the file up
 	 * to a whole number of 256-byte pages. */
-	writefile_padded(dirname, "STORY", story, storysize, 256);
+	writefile_padded(dirname, "STORY.apple2.ustory", story, storysize, 256);
 	writefile(dirname, "SAVEFILE", blank_savefile, SAVEFILE_BYTES);
 
 	paddedsize = (storysize + 0xff) & ~0xffu;

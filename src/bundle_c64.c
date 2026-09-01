@@ -259,7 +259,7 @@ void bundle_c64(char *dirname) {
 
 	// Also write out the raw story file (the USTY-inserted .aastory that
 	// went into the .d64), so it can be inspected with aamshow or reused.
-	snprintf(filename, fnsize, "%s/c64.usty", dirname);
+	snprintf(filename, fnsize, "%s/%s.c64.ustory", dirname, storyname);
 	outf = fopen(filename, "wb");
 	if(!outf) {
 		fprintf(stderr, "%s: %s", filename, strerror(errno));
