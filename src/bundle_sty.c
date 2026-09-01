@@ -236,6 +236,10 @@ static int rgb_to_c64(int r, int g, int b) {
 			best = i;
 		}
 	}
+	if(bestdist > (2+3+4)*48*48) {
+		warning(WARN_STYLE, "The color #%02x%02x%02x is not accurately represented on %s.",
+			r, g, b, sty_target->name);
+	}
 	return best;
 }
 

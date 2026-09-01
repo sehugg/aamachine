@@ -101,6 +101,9 @@ ramsz	= $ce	; word, b-e
 
 zporg	= $d0	; 24 bytes of code
 
+#if FGCOLOR
+rfgcol  = $f2	; current fg color
+#endif
 inittmp	= $f3	; word, b-e
 temp	= $f5
 pcmsb	= $f6
@@ -170,7 +173,7 @@ STY_MBOTTOM	= 3
 STY_STYON	= 4
 STY_STYOFF	= 5
 STY_FLAGS	= 6
-STY_FG		= 7	; not read yet; USTY fills it, $80 = inherit
+STY_FG		= 7	; $80 = inherit
 
 STYF_RELW	= $01
 STYF_RELH	= $02
@@ -539,6 +542,10 @@ unstyle
 	lda	stflag
 	bne	skip
 
+#if FGCOLOR
+	lda	#$80
+	sta	rfgcol
+#endif
 	lda	#0
 	sta	rstyle
 
@@ -570,12 +577,22 @@ loop
 	ldy	#STY_STYON
 	ora	(phydata),y
 	sta	rstyle
+#if FGCOLOR
+	ldy	#STY_FG
+	lda	(phydata),y
+	bmi	nofgcol
+	sta	rfgcol
+nofgcol
+#endif
 
 	inx
 	inx
 	jmp	loop
 done
 	lda	rstyle
+#if FGCOLOR
+	ldx	rfgcol
+#endif
 	jmp	io_mstyle
 skip
 	rts
@@ -689,6 +706,10 @@ clrdone
 
 restartvm
 	.(
+#if FGCOLOR
+	lda	#$80
+	sta	rfgcol
+#endif
 	lda	#0
 	sta	stflag
 	sta	rupper
@@ -7806,6 +7827,9 @@ op_style
 	lda	operlsb+0
 	ora	rstyle
 	sta	rstyle
+#if FGCOLOR
+	ldx	rfgcol
+#endif
 	jsr	io_mstyle
 	lda	#SPC_SPACE
 	sta	rspc
@@ -7817,6 +7841,9 @@ off
 	eor	#$ff
 	and	rstyle
 	sta	rstyle
+#if FGCOLOR
+	ldx	rfgcol
+#endif
 	jsr	io_mstyle
 	jmp	ldyfetchnext
 	.)
