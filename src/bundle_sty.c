@@ -428,7 +428,14 @@ static int matchval(const char *value, const char *word) {
 // Parse one null-terminated declaration, e.g. "width: 100%" or
 // "-iftf-c64-color: red". The line is copied so the key can be lowercased
 // in place; 'key' starts at the buffer, 'value' points into it.
-static void parse_decl(styclass *c, const char *p, int len) {
+//
+// Declarations are parsed in two passes per class (see parse_look): pass 0
+// takes the unprefixed ones, pass 1 the -iftf- ones. A -iftf- declaration
+// is an author's statement about this machine specifically, so it wins
+// over the same property without the prefix no matter which order the
+// style sheet lists them in -- the pass does what "last declaration wins"
+// would do only if the -iftf- line happened to come last.
+static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	char buf[256];
 	char *colon, *key, *value, *bang, *q;
 	int prefixed = 0;
@@ -455,29 +462,33 @@ static void parse_decl(styclass *c, const char *p, int len) {
 	}
 	while(q > key && (q[-1] == ' ' || q[-1] == '\t')) *--q = 0;
 
-	// -iftf-text-decoration and other non-system -iftf- properties
-	// must be parsed here, before we mess up the string
+	// -iftf- properties. -iftf-text-decoration is target-independent and
+	// keeps its key whole, but like the -iftf-<system>-<property> form it
+	// is parsed on the prefixed pass, so it overrides plain
+	// text-decoration regardless of source order. The system form is only
+	// honored when <system> matches the target being bundled.
+	if(!strncmp(key, "-iftf-", 6)) {
+		prefixed = 1;
+		if(strcmp(key, "-iftf-text-decoration")) {
+			char *prop;
+			key += 6;
+			prop = strchr(key, '-');
+			if(!prop) return;
+			*prop = 0;
+			if(strcmp(key, sty_target->name)) {
+				warning(WARN_STYLE, "Invalid system: -iftf-%s", key);
+				return;
+			}
+			key = prop + 1;
+		}
+	}
+	if(prefixed != pass) return;
+
 	if(!strcmp(key, "-iftf-text-decoration")) {
 		if(matchval(value, "reverse")) c->styon |= AASTYLE_REVERSE;
 		else if(matchval(value, "none")) c->styoff |= AASTYLE_REVERSE;
 		else warning(WARN_STYLE, "Invalid value for %s: %s", key, value);
 		return;
-	}
-
-	// -iftf-<system>-<property>: only honored when <system> matches the
-	// target being bundled.
-	if(!strncmp(key, "-iftf-", 6)) {
-		char *prop;
-		key += 6;
-		prop = strchr(key, '-');
-		if(!prop) return;
-		*prop = 0;
-		if(strcmp(key, sty_target->name)) {
-			warning(WARN_STYLE, "Invalid system: -iftf-%s", key);
-			return;
-		}
-		key = prop + 1;
-		prefixed = 1;
 	}
 
 	// Body colors are only honored when the declaration named the target,
@@ -703,6 +714,7 @@ static styclass *parse_look(int *nclassp) {
 	uint16_t n;
 	styclass *cls;
 	int i;
+	int pass;
 
 	look = find_chunk("LOOK", &looksize);
 	if(!look || looksize < 4) return 0;
@@ -733,11 +745,17 @@ static styclass *parse_look(int *nclassp) {
 		ptr = get16(look + 2 + 2 * i);
 		if(ptr >= looksize) continue;
 		end = looksize;
-		while(ptr < end && look[ptr]) {
-			uint32_t linelen = 0;
-			while(ptr + linelen < end && look[ptr + linelen]) linelen++;
-			parse_decl(&cls[i], (const char *) look + ptr, linelen);
-			ptr += linelen + 1;
+		// Two passes over the same block: unprefixed declarations first,
+		// then the -iftf- ones, so that a prefixed declaration overrides
+		// its unprefixed counterpart no matter which comes last in the CSS.
+		for(pass = 0; pass < 2; pass++) {
+			uint32_t p = ptr;
+			while(p < end && look[p]) {
+				uint32_t linelen = 0;
+				while(p + linelen < end && look[p + linelen]) linelen++;
+				parse_decl(&cls[i], (const char *) look + p, linelen, pass);
+				p += linelen + 1;
+			}
 		}
 	}
 	*nclassp = n;
