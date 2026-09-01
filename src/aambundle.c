@@ -11,7 +11,6 @@
 
 #include "aambundle.h"
 #include "aavm.h"
-#include "crc32.h"
 
 uint8_t *story;
 uint32_t storysize;
@@ -312,34 +311,6 @@ static void emit_padding(uint32_t pad) {
 }
 
 
-static void update_crc() {
-	// The story checksum in the header covers these chunks, in this order.
-	static const char *order[7] = {
-		"LOOK", "LANG", "MAPS", "DICT", "INIT", "CODE", "WRIT"
-	};
-	uint32_t crc = 0xffffffff, size, i;
-	uint8_t *data, *head;
-	int j;
-
-	for(j = 0; j < 7; j++) {
-		data = find_chunk(order[j], &size);
-		if(data) {
-			for(i = 0; i < size; i++) {
-				crc = crc32_table[(crc & 0xff) ^ data[i]] ^ (crc >> 8);
-			}
-		}
-	}
-	crc ^= 0xffffffff;
-
-	head = find_chunk("HEAD", &size);
-	if(head && size >= 16) {
-		head[12] = (crc >> 24) & 0xff;
-		head[13] = (crc >> 16) & 0xff;
-		head[14] = (crc >> 8) & 0xff;
-		head[15] = (crc >> 0) & 0xff;
-	}
-}
-
 void rewrite_chunks(chunk_rewriter_t rewriter, int align_writ) {
 	uint32_t pos = 12, size, newsize;
 	uint8_t *chunk, *newdata;
@@ -427,8 +398,6 @@ void rewrite_chunks(chunk_rewriter_t rewriter, int align_writ) {
 	story[5] = ((storysize - 8) >> 16) & 0xff;
 	story[6] = ((storysize - 8) >> 8) & 0xff;
 	story[7] = ((storysize - 8) >> 0) & 0xff;
-
-	update_crc();
 }
 
 void usage(char *prgname, int all) {

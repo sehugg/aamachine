@@ -1205,11 +1205,10 @@ int main(int argc, char **argv) {
 	actual_crc = 0xffffffff;
 	if(!savefile) {
 		// A story bundled for a 6502 target has had LOOK replaced by the
-		// precomputed USTY table, so its absence is not a defect there. (The
-		// CRC will not match HEAD either way once chunks have been rewritten
-		// -- dropping FILE chunks already saw to that.)
+		// precomputed USTY table, so its absence is not a defect there. The
+		// CRC will not match HEAD either way once chunks have been rewritten.
 		if(findchunk("USTY")) {
-			crc_chunk("USTY");
+			crc_chunk("USTY"); // crc will fail anyway
 		} else {
 			crc_chunk("LOOK");
 		}
