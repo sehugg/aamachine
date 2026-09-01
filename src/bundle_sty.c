@@ -28,11 +28,6 @@
 #define STY_TAG_C64     0x10
 #define STY_TAG_APPLE2  0x20
 
-// Revision 11 (the flat per-class array) is what the 6502 engine reads. Set
-// this to 0 to emit revision 9's deduplicating layout instead; that builder
-// is kept compiled and working, and aamshow decodes both.
-#define USTY_EMIT_FLAT  1
-
 #define STY_RELW  0x01
 #define STY_RELH  0x02
 
@@ -699,29 +694,8 @@ static void make_xsty(uint8_t *x, int classidx, const styclass *c) {
 	}
 }
 
-// Add rec to a record pool unless an identical record is already in it.
-// Returns the slot index, or -1 if the pool is full. Slot 0 of each pool is
-// the pre-seeded all-default record, so a class that sets nothing interns
-// to slot 0 and the engine needs no "no slot" sentinel.
-
-static int intern(uint8_t *pool, int *n, int max, const uint8_t *rec, int recsize) {
-	int i;
-
-	for(i = 0; i < *n; i++) {
-		if(!memcmp(pool + i * recsize, rec, recsize)) return i;
-	}
-	if(*n >= max) return -1;
-	memcpy(pool + *n * recsize, rec, recsize);
-	return (*n)++;
-}
-
 static uint16_t get16(const uint8_t *p) {
 	return (p[0] << 8) | p[1];
-}
-
-static void put16(uint8_t *p, uint32_t v) {
-	p[0] = (v >> 8) & 0xff;
-	p[1] = v & 0xff;
 }
 
 // ----------------------------------------------------------------------------
@@ -783,189 +757,6 @@ static styclass *parse_look(int *nclassp) {
 	}
 	*nclassp = n;
 	return cls;
-}
-
-// ----------------------------------------------------------------------------
-// Revision 10: one class index table and one record array holding both
-// record shapes, addressed in four-byte granules.
-//
-// Revisions 2-9 kept style and geometry in separate pools with an index
-// table each, on the theory that a joint record would make the style array
-// carry a duplicate per distinct geometry. Counting the distinct
-// (style, geometry) pairs directly showed that inflation is zero in five of
-// the six story/target pairs measured and two records in the sixth: geometry
-// already separates nearly every class that has any, so adding style to the
-// key splits almost nothing. What killed the earlier attempt was the record
-// size, not the pairing -- squeezed from 12 bytes to 8 the merge costs
-// nothing per record and buys back a whole index table plus the separate
-// style array.
-//
-// Granules rather than record numbers because div and span records would
-// otherwise need two shift counts, and a 6502 that cannot self-modify
-// (engine.s:5) then needs two copies of the pointer arithmetic. One "* 4"
-// serves both shapes, so one subroutine serves every read site.
-//
-// Index 0 is the "all defaults" sentinel and is stored nowhere: real
-// granules are numbered from 1 and granule n lives at (n - 1) * 4, which
-// the engine gets by biasing its base pointer down one granule at init.
-//
-// See STYLE_SPEC.md for the full rationale and the measurements.
-
-static int has_geometry(const styclass *c) {
-	return c->mtop || c->mbottom || c->width || c->height
-		|| c->flo || c->align || c->padleft || c->flags;
-}
-
-// Both shapes begin with the same three style bytes. That is a correctness
-// constraint, not a convenience: a style read never learns which shape it
-// got, so a span-only class can point at the front of a div record only
-// because the prefix means the same thing in both.
-
-static void make_span(uint8_t *s, const styclass *c) {
-	s[USTY_U_STYON] = c->styon & sty_target->stymask;
-	s[USTY_U_STYOFF] = c->styoff & sty_target->stymask;
-	s[USTY_U_FG] = c->fg;
-	s[3] = 0;               // never read; 0 so records dedup
-}
-
-static void make_div(uint8_t *d, const styclass *c, int classidx) {
-	uint8_t mtop = c->mtop, mbottom = c->mbottom;
-
-	// One nibble each. The corpus maxima are 3 and 2 rows against a 24-row
-	// screen, so this clamps nothing today, but a cap that wraps silently
-	// would be a trap.
-	if(mtop > USTY_MARGIN_MAX || mbottom > USTY_MARGIN_MAX) {
-		warning(WARN_STYLE,
-			"Style class %d has a margin of %d rows, more than a USTY "
-			"record can hold (limit %d); it was clamped.",
-			classidx, (mtop > mbottom)? mtop : mbottom, USTY_MARGIN_MAX);
-		if(mtop > USTY_MARGIN_MAX) mtop = USTY_MARGIN_MAX;
-		if(mbottom > USTY_MARGIN_MAX) mbottom = USTY_MARGIN_MAX;
-	}
-
-	make_span(d, c);        // the shared three-byte prefix
-	d[USTY_U_FLAGS] =
-		(c->flags & (USTY_UFL_RELW | USTY_UFL_RELH))
-		| ((c->flo & 3) << USTY_UFL_FLOAT_SHIFT)
-		| ((c->align & 3) << USTY_UFL_ALIGN_SHIFT);
-	d[USTY_U_MARGINS] = (mtop << 4) | mbottom;
-	d[USTY_U_WIDTH] = c->width;
-	d[USTY_U_HEIGHT] = c->height;
-	d[USTY_U_PADLEFT] = c->padleft;
-}
-
-static uint8_t *build_usty(uint32_t *sizep) {
-	styclass *cls;
-	int nclass;
-	uint8_t rec[USTY_MAXGRAN * USTY_GRANULE];
-	int ngran = 0;                  // granules placed so far
-	uint8_t styidx[256];
-	uint8_t divrec[256 * USTY_DIV_SIZE];
-	int divgran[256];               // granule each interned div landed on
-	int ndiv = 0;
-	uint8_t xsty[256 * USTY_XSTY_MAXSIZE];
-	int nxsty = 0;
-	uint8_t *out;
-	uint32_t size, styidxoffs, recoffs, xstyoffs;
-	int i, g;
-
-	cls = parse_look(&nclass);
-	if(!cls) return 0;
-
-	// Divs first, so that the span pass below has every div prefix to
-	// point at. Each distinct div record takes two granules.
-	for(i = 0; i < nclass; i++) {
-		uint8_t d[USTY_DIV_SIZE];
-		int slot, before;
-
-		if(!has_geometry(&cls[i])) continue;
-
-		make_div(d, &cls[i], i);
-		before = ndiv;
-		slot = intern(divrec, &ndiv, 256, d, USTY_DIV_SIZE);
-		if(slot < 0) goto toobig;
-		if(slot == before) {
-			// Newly interned, so it needs granules of its own.
-			if(ngran + 2 > USTY_MAXGRAN) goto toobig;
-			memcpy(rec + ngran * USTY_GRANULE, d, USTY_DIV_SIZE);
-			divgran[slot] = ngran + 1;
-			ngran += 2;
-		}
-		styidx[i] = USTY_IDX_DIV | divgran[slot];
-	}
-
-	// Then the span-only classes. A span read takes three bytes from
-	// wherever it points and never learns what shape it landed in, so any
-	// granule boundary whose first three bytes match will do -- including
-	// the front of a div record, which is where sharing comes from. The
-	// scan below covers div granules and already-placed spans alike.
-	for(i = 0; i < nclass; i++) {
-		uint8_t s[USTY_SPAN_SIZE];
-		static const uint8_t spandflt[USTY_SPAN_SIZE] = {0, 0, NOCOLOR, 0};
-
-		if(has_geometry(&cls[i])) continue;
-
-		make_span(s, &cls[i]);
-		if(!memcmp(s, spandflt, USTY_SPAN_SIZE)) {
-			styidx[i] = 0;  // all defaults: no record at all
-			continue;
-		}
-		for(g = 1; g <= ngran; g++) {
-			if(!memcmp(rec + (g - 1) * USTY_GRANULE, s, 3)) break;
-		}
-		if(g > ngran) {
-			if(ngran + 1 > USTY_MAXGRAN) goto toobig;
-			memcpy(rec + ngran * USTY_GRANULE, s, USTY_SPAN_SIZE);
-			g = ++ngran;
-		}
-		styidx[i] = g;
-	}
-
-	// Body records, keyed on the raw class index because SET_BODY takes a
-	// class operand and this data is deliberately outside the record dedup.
-	for(i = 0; i < nclass; i++) {
-		if(cls[i].hasbody) {
-			make_xsty(xsty + nxsty * sty_target->xstysize, i, &cls[i]);
-			nxsty++;
-		}
-	}
-
-	styidxoffs = USTY_UNION_HDRSIZE;
-	recoffs = styidxoffs + nclass;
-	xstyoffs = recoffs + ngran * USTY_GRANULE;
-	size = xstyoffs + nxsty * sty_target->xstysize;
-	out = malloc(size);
-	if(!out) {
-		fprintf(stderr, "Out of memory.\n");
-		exit(1);
-	}
-
-	out[0] = sty_target->tag | USTY_VERSION_UNION;
-	out[1] = nclass;
-	out[2] = ngran;
-	out[3] = nxsty;
-	out[4] = sty_target->xstysize;  // per-target body record stride
-	out[5] = 0;
-	// styidx always follows the fixed header, so the engine's hottest base
-	// pointer needs no header read. The other two follow from the counts,
-	// but stating them saves the engine that arithmetic at init.
-	put16(out + 6, recoffs);
-	put16(out + 8, xstyoffs);
-	memcpy(out + styidxoffs, styidx, nclass);
-	memcpy(out + recoffs, rec, ngran * USTY_GRANULE);
-	memcpy(out + xstyoffs, xsty, nxsty * sty_target->xstysize);
-
-	free(cls);
-	*sizep = size;
-	return out;
-
-toobig:
-	fprintf(stderr,
-		"Story needs more than %d style granules, more than a USTY record "
-		"array can address.",
-		USTY_MAXGRAN);
-	free(cls);
-	exit(1);
 }
 
 // Revision 11: one 8-byte record per class, no dedup, no index table.
@@ -1095,9 +886,7 @@ chunk_action_t rewrite_6502_sty(
 	// engine still carries that parser.
 	if(sty_target && !sty_emitted && !strcmp(id, "LOOK")) {
 		if(!sty_payload) {
-			sty_payload = USTY_EMIT_FLAT
-				? build_usty_flat(&sty_size)
-				: build_usty(&sty_size);
+			sty_payload = build_usty_flat(&sty_size);
 		}
 		if(sty_payload) {
 			memcpy(newid, "USTY", 4);

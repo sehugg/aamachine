@@ -179,57 +179,11 @@
 // USTY chunk (precomputed style table for the 6502 targets; see
 // STYLE_SPEC.md). Shared by aambundle's generator and aamshow's decoder so
 // the two cannot drift.
-//
-// Two revisions are implemented. Revision 11 is what aambundle emits and
-// what the 6502 engine reads: a flat array of one 8-byte record per class,
-// in the field order engine.s has always used, so the engine's read sites
-// did not have to change and initengine4 becomes a blit. Revision 9 is the
-// deduplicating layout -- per-class slot indices into interned record pools
-// -- which is smaller on stories with many repeated classes but costs code
-// at every read site. It stays compiled behind USTY_EMIT_FLAT in
-// bundle_sty.c, and decodable in aamshow, because that trade reverses once
-// a story has enough classes; the measurements are in STYLE_SPEC.md.
-#define USTY_VERSION_UNION	10	// 0..15, can wrap since it's internal
+
+// The USTY version number is internal, mainly to prevent devs from confusing
+// themselves, so it should be incremented often and can wrap (0..15)
 #define USTY_VERSION_FLAT	11
 #define USTY_VERSION		USTY_VERSION_FLAT
-
-// Revision 10: one index table and one record array holding both shapes.
-// A granule is four bytes, the addressing unit of the array: a span record
-// is one granule, a div record two. Seven bits of granule number in the
-// class index byte cap the array at 127 granules.
-#define USTY_UNION_HDRSIZE	10
-#define USTY_GRANULE		4
-#define USTY_DIV_SIZE		8	// 2 granules
-#define USTY_SPAN_SIZE		4	// 1 granule
-#define USTY_MAXGRAN		127
-
-// Class index byte: bit 7 says the class has geometry (a div record), the
-// low seven bits are its 1-based granule number, and 0 means "all defaults,
-// no record stored".
-#define USTY_IDX_DIV		0x80
-#define USTY_IDX_GRAN		0x7f
-
-// Field order within a revision 10 record. Both shapes begin with the same
-// three style bytes, which is what lets a span-only class point into the
-// front of a div record.
-#define USTY_U_STYON		0
-#define USTY_U_STYOFF		1
-#define USTY_U_FG		2
-#define USTY_U_FLAGS		3	// div only; a span's byte 3 is never read
-#define USTY_U_MARGINS		4	// mtop << 4 | mbottom
-#define USTY_U_WIDTH		5
-#define USTY_U_HEIGHT		6
-#define USTY_U_PADLEFT		7
-
-// USTY_U_FLAGS bits.
-#define USTY_UFL_RELW		0x01
-#define USTY_UFL_RELH		0x02
-#define USTY_UFL_FLOAT		0x0c	// 0 none, 1 left, 2 right, 3 auto (centered)
-#define USTY_UFL_FLOAT_SHIFT	2
-#define USTY_UFL_ALIGN		0x30	// 0 none, 1 left, 2 right, 3 center
-#define USTY_UFL_ALIGN_SHIFT	4
-#define USTY_UFL_EXTEND		0x40	// record is 16 bytes; reserved, never set
-#define USTY_MARGIN_MAX		15	// a nibble each
 
 // Revision 11. The header is four bytes because the flat layout needs no
 // stated offsets: the records start at a fixed offset, and the body records
@@ -260,10 +214,6 @@
 #define USTY_FL_ALIGN_SHIFT	2
 #define USTY_FL_FLOATL		0x40
 #define USTY_FL_FLOATR		0x80
-
-// A body record has to fit databuf, which is 8 bytes (engine.s:131), because
-// SET_BODY scans the xsty array one record at a time through readdata.
-#define USTY_XSTY_MAXSIZE	8
 
 #define AASTYLE_REVERSE		1
 #define AASTYLE_BOLD		2
