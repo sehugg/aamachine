@@ -33,17 +33,17 @@
 
 #define NOCOLOR   0x80    // "$80 = not set" sentinel for the sty fg field
 
-// Bytes per xsty record for the c64: class index, background|border, and
-// four palette bytes. This is a *per-target* size -- it is what the c64's
-// body record happens to need, not a property of the format -- so it lives
-// in struct sty_target and travels in the chunk header. A target whose
-// frontend has a different palette shape declares its own; one with no body
-// records at all declares 0.
-#define XSTY_SIZE_C64 6
+// Bytes per xsty record for the c64: class index, background|border, four
+// palette bytes, and the cursor color. This is a *per-target* size -- it is
+// what the c64's body record happens to need, not a property of the format
+// -- so it lives in struct sty_target and travels in the chunk header. A
+// target whose frontend has a different palette shape declares its own; one
+// with no body records at all declares 0.
+#define XSTY_SIZE_C64 7
 
-// A body record's six colors, in xsty nibble order. Only declarations that
-// name the target explicitly (-iftf-sys-c64-background-color and friends) fill
-// these in; see the body-record note above build_usty().
+// A body record's eleven colors, in xsty nibble order. Only declarations
+// that name the target explicitly (-iftf-sys-c64-background-color and
+// friends) fill these in; see the body-record note above build_usty().
 // The eight palette entries are indexed by the low three AASTYLE bits
 // exactly as they arrive: reverse | bold << 1 | italic << 2. So io_mstyle
 // is "and #7 / tax / lda palette,x" -- no shifting, no special case for
@@ -51,8 +51,14 @@
 enum {
 	BODY_BG, BODY_BORDER,
 	BODY_PAL,               // BODY_PAL + (style & 7)
-	BODY_N = BODY_PAL + 8
+	BODY_CURSOR,
+	BODY_N = BODY_PAL + 9
 };
+
+// The cursor color (BODY_CURSOR) is not part of the style palette; it is
+// the sprite color register $d027, which SET_BODY will rewrite alongside
+// background and border. Like the other body colors it is only settable
+// through -iftf-sys-<target>-cursor-color.
 
 static const char *bodyprops[BODY_N] = {
 	"background-color", "border-color",
@@ -63,7 +69,8 @@ static const char *bodyprops[BODY_N] = {
 	"italic-color",                 // 4  italic
 	"italic-reverse-color",         // 5  italic reverse
 	"bold-italic-color",            // 6  bold italic
-	"bold-italic-reverse-color"     // 7  bold italic reverse
+	"bold-italic-reverse-color",    // 7  bold italic reverse
+	"cursor-color"                  // $d027, not a palette entry
 };
 
 // The c64 frontend's compiled-in defaults: a light grey screen and border
@@ -84,7 +91,8 @@ static const uint8_t c64_bodydef[BODY_N] = {
 	0x00, 0x00,             // -, reverse
 	0x0b, 0x0b,             // bold, bold reverse
 	0x06, 0x06,             // italic, italic reverse
-	0x0e, 0x0e              // bold italic, bold italic reverse
+	0x0e, 0x0e,             // bold italic, bold italic reverse
+	0x08                    // cursor (orange, c64_frontend.s $d027 init)
 };
 
 struct sty_target {
@@ -692,6 +700,10 @@ static void make_xsty(uint8_t *x, int classidx, const styclass *c) {
 		x[2 + j] = c->body[BODY_PAL + j * 2]
 			| (c->body[BODY_PAL + j * 2 + 1] << 4);
 	}
+	// Cursor color in the low nibble; the high nibble is reserved and
+	// stays 0 so a future eleventh field can move in without moving this
+	// one.
+	x[6] = c->body[BODY_CURSOR];
 }
 
 static uint16_t get16(const uint8_t *p) {

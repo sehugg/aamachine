@@ -187,7 +187,7 @@ void decode_look(struct chunk *ch) {
 //     styidx[nclass]      ; class -> byte offset into sty (slot * 4)
 //     sty[nsty * 4]
 //     geo[ngeo * 8]
-//     xsty[nxsty * 6]
+//     xsty[nxsty * xstysize]     ; 7 bytes
 //
 // Every array offset follows from the counts, so the header carries none.
 // The xsty record shape follows from the tag's target nibble.
@@ -214,8 +214,9 @@ static void decode_xsty(uint8_t *d, uint8_t tag, uint32_t xstyoffs,
 	uint8_t nxsty, uint8_t xstysize)
 {
 	// Body records: background, border, then eight palette entries
-	// indexed by the low three style bits. All ten are always present;
-	// the bundler resolves undeclared ones to the frontend's defaults.
+	// indexed by the low three style bits, then the cursor color. All
+	// eleven are always present; the bundler resolves undeclared ones
+	// to the frontend's defaults.
 	static const char *palnames[8] = {
 		"-", "R", "B", "BR", "I", "IR", "BI", "BIR"
 	};
@@ -225,8 +226,10 @@ static void decode_xsty(uint8_t *d, uint8_t tag, uint32_t xstyoffs,
 	// every target. The rest of the record is the frontend's palette,
 	// so the field-by-field dump below is c64-shaped; another 6502
 	// platform with a different palette gets a hex dump rather than a
-	// confident misreading of its bytes.
-	int c64shape = (tag & 0xf0) == 0x10 && xstysize == 6;
+	// confident misreading of its bytes. Size 6 is the pre-cursor
+	// record (kept readable); 7 adds the cursor nibble in byte 6.
+	int c64shape = (tag & 0xf0) == 0x10 && (xstysize == 6 || xstysize == 7);
+	int hascursor = xstysize >= 7;
 
 	printf("\nxsty (%d body records, %d bytes each):\n", nxsty, xstysize);
 	if(c64shape) {
@@ -250,6 +253,7 @@ static void decode_xsty(uint8_t *d, uint8_t tag, uint32_t xstyoffs,
 				(j & 1)? x[2 + j / 2] >> 4 : x[2 + j / 2] & 15);
 		}
 		printf("\n");
+		printf("      cursor=%x (reserved=%x)\n", x[6] & 15, x[6] >> 4);
 	}
 }
 
