@@ -47,7 +47,7 @@
 #define XSTY_SIZE_C64 6
 
 // A body record's six colors, in xsty nibble order. Only declarations that
-// name the target explicitly (-iftf-c64-background-color and friends) fill
+// name the target explicitly (-iftf-sys-c64-background-color and friends) fill
 // these in; see the body-record note above build_usty().
 // The eight palette entries are indexed by the low three AASTYLE bits
 // exactly as they arrive: reverse | bold << 1 | italic << 2. So io_mstyle
@@ -427,7 +427,7 @@ static int matchval(const char *value, const char *word) {
 }
 
 // Parse one null-terminated declaration, e.g. "width: 100%" or
-// "-iftf-c64-color: red". The line is copied so the key can be lowercased
+// "-iftf-sys-c64-color: red". The line is copied so the key can be lowercased
 // in place; 'key' starts at the buffer, 'value' points into it.
 //
 // Declarations are parsed in two passes per class (see parse_look): pass 0
@@ -599,9 +599,35 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 		matched = 1;
 		if(sty_target->have_vic_color) {
 			int ci;
-			if(parse_color(value, &ci)) c->fg = ci;
+			if(parse_color(value, &ci)) {
+				c->fg = ci;
+				// An unprefixed color identical to the machine's default
+				// screen background renders invisible text. An author who
+				// wants that deliberately would have said so with
+				// -iftf-sys-<sys>-color, which is exempt.
+				if(!prefixed && sty_target->bodydef &&
+					ci == sty_target->bodydef[BODY_BG]) {
+					warning(WARN_STYLE,
+						"color %s matches the default background color on %s; "
+						"text with this class will be invisible unless (body style $Class) is used.",
+						value, sty_target->name);
+				}
+			}
 		} else {
 			warning(WARN_STYLE, "color is not supported on %s and was ignored.", sty_target->name);
+		}
+	} else if(!strcmp(key, "background-color")) {
+		matched = 1;
+		if(!prefixed) {
+			// Only -iftf-sys-<sys>-background-color fills the body record; the
+			// unprefixed form does nothing on any 6502 target. (On the web
+			// it colors the element itself, not the screen, so the two
+			// cannot share a declaration.)
+			if(sty_target->bodydef) {
+				warning(WARN_STYLE,
+					"To set the screen background on %s, use -iftf-sys-%s-background-color.",
+					sty_target->name, sty_target->name);
+			}
 		}
 	} else if(!strcmp(key, "display")) {
 		matched = 1;
@@ -620,7 +646,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	// specifically, so silence would hide a real gap -- the -iftf- set is
 	// young and grows.
 	if(prefixed && !matched) {
-		warning(WARN_STYLE, "-iftf-%s-%s is not supported yet.", sty_target->name, key);
+		warning(WARN_STYLE, "-iftf-sys-%s-%s is not supported yet.", sty_target->name, key);
 	}
 	// Anything else is ignored, as an interpreter must per the spec. That
 	// includes background-color, border and border-color: a div's tint and
@@ -743,7 +769,7 @@ static styclass *parse_look(int *nclassp) {
 		if(ptr >= looksize) continue;
 		end = looksize;
 		// Two passes over the same block: unprefixed declarations first,
-		// then the -iftf- ones, so that a prefixed declaration overrides
+		// then the -iftf-sys- ones, so that a prefixed declaration overrides
 		// its unprefixed counterpart no matter which comes last in the CSS.
 		for(pass = 0; pass < 2; pass++) {
 			uint32_t p = ptr;
