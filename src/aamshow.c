@@ -229,7 +229,6 @@ static void decode_xsty(uint8_t *d, uint8_t tag, uint32_t xstyoffs,
 	// confident misreading of its bytes. Size 6 is the pre-cursor
 	// record (kept readable); 7 adds the cursor nibble in byte 6.
 	int c64shape = (tag & 0xf0) == 0x10 && (xstysize == 6 || xstysize == 7);
-	int hascursor = xstysize >= 7;
 
 	printf("\nxsty (%d body records, %d bytes each):\n", nxsty, xstysize);
 	if(c64shape) {

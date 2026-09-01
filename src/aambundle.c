@@ -507,7 +507,7 @@ int main(int argc, char **argv) {
 		if(!strcmp(target, "web:story")) {
 			dirname = "story.js";
 		} else if(!strcmp(target, "aambox")) {
-			dirname = "story.aastory";
+			dirname = "story.ustory";
 		} else {
 			dirname = malloc(strlen(argv[optind]) + 8);
 			strcpy(dirname, argv[optind]);
