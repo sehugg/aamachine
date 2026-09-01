@@ -83,6 +83,7 @@ static const char *bodyprops[BODY_N] = {
 // one, and only differs where an author asks it to. (The c64 does not draw
 // reverse video at all yet; the Apple II does, a2_frontend.s:1397, but has
 // no per-character color.)
+// TODO: sync with 6502 frontend
 static const uint8_t c64_bodydef[BODY_N] = {
 	0x0f, 0x0f,             // background, border
 	0x00, 0x00,             // -, reverse
@@ -462,25 +463,19 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	}
 	while(q > key && (q[-1] == ' ' || q[-1] == '\t')) *--q = 0;
 
-	// -iftf- properties. -iftf-text-decoration is target-independent and
-	// keeps its key whole, but like the -iftf-<system>-<property> form it
-	// is parsed on the prefixed pass, so it overrides plain
-	// text-decoration regardless of source order. The system form is only
-	// honored when <system> matches the target being bundled.
-	if(!strncmp(key, "-iftf-", 6)) {
+	// -iftf-sys-<target>-* properties
+	if(!strncmp(key, "-iftf-sys-", 10)) {
 		prefixed = 1;
-		if(strcmp(key, "-iftf-text-decoration")) {
-			char *prop;
-			key += 6;
-			prop = strchr(key, '-');
-			if(!prop) return;
-			*prop = 0;
-			if(strcmp(key, sty_target->name)) {
-				warning(WARN_STYLE, "Invalid system: -iftf-%s", key);
-				return;
-			}
-			key = prop + 1;
+		char *prop;
+		key += 10;
+		prop = strchr(key, '-');
+		if(!prop) return;
+		*prop = 0;
+		// ignore if not the target system
+		if(strcmp(key, sty_target->name)) {
+			return;
 		}
+		key = prop + 1;
 	}
 	if(prefixed != pass) return;
 
@@ -717,7 +712,7 @@ static styclass *parse_look(int *nclassp) {
 	int pass;
 
 	look = find_chunk("LOOK", &looksize);
-	if(!look || looksize < 4) return 0;
+	if(!look) return 0;
 
 	n = get16(look);
 	if(n > 255) {
@@ -728,6 +723,8 @@ static styclass *parse_look(int *nclassp) {
 			n);
 		return 0;
 	}
+	// need at least one style, ok if it's empty
+	if (!n) n++;
 	cls = calloc(n, sizeof(styclass));
 	if(!cls) return 0;
 
@@ -937,13 +934,12 @@ static uint8_t *build_usty(uint32_t *sizep) {
 	return out;
 
 toobig:
-	warning(WARN_STYLE,
+	fprintf(stderr,
 		"Story needs more than %d style granules, more than a USTY record "
-		"array can address; the interpreter will parse the style sheet at "
-		"startup instead.",
+		"array can address.",
 		USTY_MAXGRAN);
 	free(cls);
-	return 0;
+	exit(1);
 }
 
 // Revision 11: one 8-byte record per class, no dedup, no index table.
