@@ -21,8 +21,7 @@
 // ============================================================================
 
 // The high nibble of the tag byte names the target, the low nibble the
-// format revision. The revision is OR'd in by whichever builder ran, so the
-// two layouts cannot be confused for each other on the way in.
+// format revision (0..15, internal only so it can recycle)
 #define STY_TAG_AAMBOX  0x00
 #define STY_TAG_C64     0x10
 #define STY_TAG_APPLE2  0x20
@@ -32,38 +31,18 @@
 
 #define NOCOLOR   0x80    // "$80 = not set" sentinel for the sty fg field
 
-// Bytes per xsty record for the c64: class index, background|border, four
-// palette bytes, and the cursor color. This is a *per-target* size -- it is
-// what the c64's body record happens to need, not a property of the format
-// -- so it lives in struct sty_target and travels in the chunk header. A
-// target whose frontend has a different palette shape declares its own; one
-// with no body records at all declares 0.
+// Bytes per xsty record for the c64. This goes in the chunk header.
+// Must be <= USTY_MAX_XSTYSIZE
 #define XSTY_SIZE_C64 7
 
-// A body record has to fit databuf on the 6502 (engine.s:138), which is what
-// keeps a readdata-based reader available to a target too tight to hold the
-// array resident. Caught here rather than in a comment, because the number
-// lives in struct sty_target and a new target would set its own.
-typedef char xsty_fits_databuf[(XSTY_SIZE_C64 <= USTY_MAX_XSTYSIZE)? 1 : -1];
-
-// A body record's eleven colors, in xsty nibble order. Only declarations
-// that name the target explicitly (-iftf-sys-c64-background-color and
-// friends) fill these in; see the body-record note above build_usty().
-// The eight palette entries are indexed by the low three AASTYLE bits
-// exactly as they arrive: reverse | bold << 1 | italic << 2. So io_mstyle
-// is "and #7 / tax / lda palette,x" -- no shifting, no special case for
-// reverse, and every combination gets its own color.
+// xsty payload for C64.
 enum {
-	BODY_BG, BODY_BORDER,
-	BODY_PAL,               // BODY_PAL + (style & 7)
-	BODY_CURSOR,
-	BODY_N = BODY_PAL + 9
+	BODY_BG = 0,
+	BODY_BORDER = 1,
+	BODY_PAL = 2,		// BODY_PAL + (style & 7)
+	BODY_CURSOR = 10,	// sprite color register $d027
+	BODY_N = 11
 };
-
-// The cursor color (BODY_CURSOR) is not part of the style palette; it is
-// the sprite color register $d027, which SET_BODY will rewrite alongside
-// background and border. Like the other body colors it is only settable
-// through -iftf-sys-<target>-cursor-color.
 
 static const char *bodyprops[BODY_N] = {
 	"background-color", "border-color",
@@ -79,24 +58,13 @@ static const char *bodyprops[BODY_N] = {
 };
 
 // The c64 frontend's compiled-in defaults: a light grey screen and border
-// (c64_frontend.s:2564) and the palette table (c64_frontend.s:521). The
-// bundler resolves undeclared fields to these, so SET_BODY writes every
-// nibble with no presence tests.
-//
-// Today's palette has four entries indexed by bold | italic << 1, because
-// io_mstyle drops the reverse bit. Each reverse variant therefore defaults
-// to its non-reverse counterpart, which is exactly what the c64 renders
-// today -- the eight-entry table starts out behaving like the four-entry
-// one, and only differs where an author asks it to. (The c64 does not draw
-// reverse video at all yet; the Apple II does, a2_frontend.s:1397, but has
-// no per-character color.)
-// TODO: sync with 6502 frontend
+// Keep this in sync with c64 frontend.
 static const uint8_t c64_bodydef[BODY_N] = {
 	0x0f, 0x0f,             // background, border
-	0x00, 0x00,             // -, reverse
-	0x0b, 0x0b,             // bold, bold reverse
-	0x06, 0x06,             // italic, italic reverse
-	0x0e, 0x0e,             // bold italic, bold italic reverse
+	0x00, 0x01,             // -, reverse
+	0x0b, 0x07,             // bold, bold reverse
+	0x06, 0x02,             // italic, italic reverse
+	0x0e, 0x0a,             // bold italic, bold italic reverse
 	0x08                    // cursor (orange, c64_frontend.s $d027 init)
 };
 
@@ -105,39 +73,17 @@ struct sty_target {
 	uint8_t tag;
 	int have_vic_color;     // per-character fg color (c64)
 	uint8_t stymask;        // AASTYLE_* bits the frontend can actually act on
-	const uint8_t *bodydef; // BODY_N defaults, or null if the target has
-	                        // no body records at all
+	const uint8_t *bodydef; // BODY_N defaults, or null if the target has no records
 	uint8_t xstysize;       // bytes per body record; 0 if bodydef is null.
-	                        // Emitted in the header, so a decoder can stride
-	                        // the array without knowing the target. Note that
-	                        // the *packing* below is c64-shaped: a target with
-	                        // a different palette needs its own packer, not
-	                        // just a different size here.
 
-	// Screen size in character cells, for range-checking absolute lengths.
-	// mincols/maxcols bracket the machine's real text widths: the c64 is a
-	// fixed 40; the apple2 is 40 or 80 depending on the card present, and
-	// the bundler cannot know which; aambox is exactly 80. The engine clamps
-	// heights to 19 (enter_status: cmp #20 / lda #19, engine.s:3931).
-	int mincols, maxcols;
-	int maxrows;
+	int mincols, maxcols;	// 40 for c64, 40-80 for apple2, 80 for aambox
+	int maxrows;		// 20 for all
 };
 
-// stymask is what the target's io_mstyle looks at, and nothing else reads
-// rstyle. Bits outside it cannot change a single pixel, so masking them out
-// before interning collapses records that differ only in styles the target
-// cannot render. AASTYLE_FIXED is in no mask: every 8-bit target is
-// monospace already, and no frontend tests bit 3.
-//
-//   c64     io_mstyle: lsr / and #3 -> bold | italic (c64_frontend.s:508).
-//           Reverse is masked in even though the c64 does not draw it yet,
-//           because the body record already carries a reverse color for it.
-//   apple2  mstyle_enter: lsr, carry -> set_inverse (a2_frontend.s:1394).
-//           Reverse and nothing else.
-//   aambox  io_mstyle is a bare rts (aambox_frontend.s:221). Nothing.
-
 static const struct sty_target sty_aambox = {
-	"aambox", STY_TAG_AAMBOX, 0, 0, 0, 0, 80, 80, 20
+	"aambox", STY_TAG_AAMBOX, 0,
+	0, 0, 0,
+	80, 80, 20
 };
 static const struct sty_target sty_c64 = {
 	"c64", STY_TAG_C64, 1,
@@ -145,7 +91,9 @@ static const struct sty_target sty_c64 = {
 	40, 40, 20
 };
 static const struct sty_target sty_apple2 = {
-	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0, 0, 40, 80, 20
+	"apple2", STY_TAG_APPLE2, 0,
+	AASTYLE_REVERSE, 0, 0,
+	40, 80, 20
 };
 
 static const struct sty_target *sty_target;
@@ -178,17 +126,12 @@ static const uint8_t c64_rgb[16][3] = {
 	{119, 119, 119}, {170, 255, 102}, {0, 136, 255}, {187, 187, 187}
 };
 
-// CSS color names map by name to their obvious VIC-II counterpart, so the
-// full basic + extended CSS palettes fold into one table. Pure nearest-RGB
-// is wrong here: CSS "green" (#008000) is closer to VIC-II dark grey (11)
-// than to VIC-II green (#00cc55), which surprises authors far more than it
-// helps. Hex/rgb() values still use nearest-match. lightred/lightgreen/
-// lightblue coincide exactly with VIC-II colors 10/13/14, so those names can
-// live here too instead of going through rgb_to_c64().
+// CSS color names map by name to their obvious VIC-II counterparts
 static const struct {
 	const char *name;
 	uint8_t vic;
 } css2vic[] = {
+	// canonical names (0..15 in order)
 	{"black", 0},
 	{"white", 1},
 	{"red", 2},
@@ -221,12 +164,9 @@ static const struct {
 	{"silver", 15},
 };
 
-// Map an rgb triplet to the nearest VIC-II color, using a perceptual
-// distance (weighted RGB, a standard cheap approximation of CIE lightness).
 // Style warnings, routed through swarn() so that they can be silenced
 // while parsing declarations that a -iftf-sys- declaration in the same
-// class overrides anyway: the prefixed pass is the author speaking to this
-// machine, and it gets to say what it replaces.
+// class overrides anyway.
 static int sty_quiet;
 
 static void swarn(const char *fmt, ...) {
@@ -237,6 +177,8 @@ static void swarn(const char *fmt, ...) {
 	va_end(ap);
 }
 
+// Map an rgb triplet to the nearest VIC-II color, using a perceptual
+// distance (weighted RGB, a standard cheap approximation of CIE lightness).
 static int rgb_to_c64(int r, int g, int b) {
 	int best = 0, bestdist = 0x7fffffff;
 	int i;
@@ -463,10 +405,6 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 		matched = 1;
 		if(n == 2 && !strcmp(unit, "%")) {
 			if(v > 100) {
-				// Bigger than the whole screen; the web overflows, an
-				// 8-bit machine cannot. (For height it is doubly
-				// pointless: the engine treats any relative height as
-				// one row.)
 				swarn("Percent %s \"%s\" is more than 100%% and will not fit the screen.",
 					key, value);
 			}
@@ -589,7 +527,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 				// -iftf-sys-<sys>-color, which is exempt.
 				if(!prefixed && sty_target->bodydef &&
 					ci == sty_target->bodydef[BODY_BG]) {
-					swarn(						"color %s matches the default background color on %s; "
+					swarn("color %s matches the default background color on %s; "
 						"text with this class will be invisible unless (body style $Class) is used.",
 						value, sty_target->name);
 				}
@@ -641,14 +579,6 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 // A revision 11 record: everything about one class in eight bytes, laid out
 // in engine.s's STY_* order so that stybase + class * 8 keeps working and
 // none of the engine's read sites move.
-//
-// Two properties the CSS parsers understand do not fit and are dropped
-// here, which build_usty_flat() warns about: padding/margin-left has no
-// byte left, and "margin: auto" centering has no flags encoding -- $c0
-// would read as a right float to the engine's cpx #STYF_FLOATR test, which
-// is worse than ignoring it. Neither is rendered by any 6502 frontend
-// today, and the engine's own parser has always ignored both, so a story
-// bundled with USTY looks exactly like the same story bundled without it.
 
 static void make_flat(uint8_t *r, const styclass *c) {
 	uint8_t flags = c->flags & (USTY_FL_RELW | USTY_FL_RELH);
@@ -668,7 +598,7 @@ static void make_flat(uint8_t *r, const styclass *c) {
 }
 
 // Body records are keyed on the raw class index because SET_BODY takes a
-// class operand, and they are identical in both revisions.
+// class operand.
 
 static void make_xsty(uint8_t *x, int classidx, const styclass *c) {
 	int j;
@@ -679,10 +609,7 @@ static void make_xsty(uint8_t *x, int classidx, const styclass *c) {
 		x[2 + j] = c->body[BODY_PAL + j * 2]
 			| (c->body[BODY_PAL + j * 2 + 1] << 4);
 	}
-	// Cursor color in the low nibble; the high nibble is reserved and
-	// stays 0 so a future eleventh field can move in without moving this
-	// one.
-	x[6] = c->body[BODY_CURSOR];
+	x[6] = c->body[BODY_CURSOR]; // high nibble reserved
 }
 
 static uint16_t get16(const uint8_t *p) {
@@ -718,9 +645,7 @@ static styclass *parse_look(int *nclassp) {
 	cls = calloc(n, sizeof(styclass));
 	if(!cls) return 0;
 
-	// fg defaults to "not set", which is not the same as black. Done up
-	// front so that a truncated LOOK leaves the unparsed tail of the array
-	// looking like classes that set nothing, rather than black-on-black.
+	// fg defaults to "not set", which is not the same as black.
 	for(i = 0; i < n; i++) {
 		cls[i].fg = NOCOLOR;
 	}
@@ -863,8 +788,7 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 	// eight-byte record. Say so once per story rather than once per class.
 	if(npadleft) {
 		swarn("%d style class%s set a left margin or padding, which a USTY "
-			"record has no room for; it was ignored, as the interpreter's "
-			"own style sheet parser ignores it.",
+			"record has no room for; it was ignored.",
 			npadleft, (npadleft == 1)? "" : "es");
 	}
 	if(nauto) {
@@ -881,13 +805,7 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 // ----------------------------------------------------------------------------
 // Public API.
 
-// Called after rewrite_chunks(). On a target whose interpreter has no style
-// sheet parser, failing to build the table is fatal rather than a warning:
-// the alternative is a disk image that boots and then renders every div with
-// whatever the heap happened to contain. Both ways of getting here --
-// build_usty*() returning 0, and the story having no LOOK chunk for
-// rewrite_6502_sty() to key off -- land in the same place.
-
+// Called after rewriting USTY, exits program with an error code it didn't happen.
 void gen_usty_check(void) {
 	if(sty_target && !sty_emitted) {
 		warning(WARN_ERROR,
@@ -923,11 +841,6 @@ chunk_action_t rewrite_6502_sty(
 
 	if(act == CHUNK_DROP) return act;
 
-	// USTY takes LOOK's place in the chunk order: it is derived from
-	// LOOK's payload and supersedes it, so shipping both would be dead
-	// weight in the disk image. If the table cannot be built the story
-	// keeps LOOK and the interpreter parses it at startup, which is why the
-	// engine still carries that parser.
 	if(sty_target && !sty_emitted && !strcmp(id, "LOOK")) {
 		if(!sty_payload) {
 			sty_payload = build_usty_flat(&sty_size);
