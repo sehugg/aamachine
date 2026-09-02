@@ -105,7 +105,7 @@ aambundle.exe: aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c bundle_6502
 	tables_6502font.h
 	${MINGW32} ${CFLAGS} -o $@ aambundle.c bundle_web.c bundle_c64.c bundle_apple2.c bundle_6502.c bundle_sty.c check_charset.c check_keyboard.c crc32.c
 
-table_charset.h:	6502 6502/charset.h
+table_charset.h:	6502/charset.h
 			cp 6502/charset.h $@
 
 # Fall back rules when you make a blob from here
