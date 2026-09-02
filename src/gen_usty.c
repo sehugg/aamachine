@@ -349,7 +349,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	key = buf;
 	while(*key == ' ' || *key == '\t') key++;
 	for(q = key; *q; q++) {
-		if(*q >= 'A' && *q <= 'Z') *q |= 0x20;
+		if(*q >= 'A' && *q <= 'Z') *q |= 0x20; // make lowercase
 	}
 	while(q > key && (q[-1] == ' ' || q[-1] == '\t')) *--q = 0;
 
@@ -561,19 +561,11 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 		}
 	}
 
-	// A prefix that named the target but a property the bundler does not
-	// know. This is the one case where the author addressed this machine
-	// specifically, so silence would hide a real gap -- the -iftf- set is
-	// young and grows.
+	// A prefix that named the target but a property the bundler does not know.
 	if(prefixed && !matched) {
 		swarn("-iftf-sys-%s-%s is not supported yet.", sty_target->name, key);
 	}
-	// Anything else is ignored, as an interpreter must per the spec. That
-	// includes background-color, border and border-color: a div's tint and
-	// a div's border are not the screen background and border registers,
-	// and every such declaration measured is a decorative web overlay on a
-	// class SET_BODY never sees. An author who wants the c64 screen colors
-	// says so with -iftf-c64-background-color.
+	// Anything else is ignored, as an interpreter must per the spec.
 }
 
 // A revision 11 record: everything about one class in eight bytes, laid out
@@ -634,10 +626,7 @@ static styclass *parse_look(int *nclassp) {
 
 	n = get16(look);
 	if(n > 255) {
-		swarn("Story has %d style classes, more than a USTY table can index "
-			"(limit 255); the interpreter will parse the style sheet at "
-			"startup instead.",
-			n);
+		warning(WARN_STYLE, "Story has %d style classes, more than a USTY table can index (255).", n);
 		return 0;
 	}
 	// need at least one style, ok if it's empty
@@ -689,74 +678,36 @@ static styclass *parse_look(int *nclassp) {
 				p += linelen + 1;
 			}
 		}
-		sty_quiet = 0;
+		sty_quiet = 0; // re-enable warnings
 	}
 	*nclassp = n;
 	return cls;
 }
 
-// Revision 12: one 8-byte record per class, no dedup, no index table, and a
-// header that states what the engine would otherwise have to work out.
-//
-// The record array is revision 11's, byte for byte: the record for class n
-// is at stybase + n * 8, which is the addressing engine.s already used for
-// the table it built by parsing CSS. What revision 12 adds is two header
-// figures -- the total size of the resident block and the offset of the body
-// array within it -- so that initengine4 is one allocwords and one
-// readdatato with no multiplies at all. Deriving those two in the engine
-// instead costs 45 bytes of 6502; stating them costs 4 bytes of chunk.
+// Build the USTY chunk.
 //
 // The payload is padded to an even length after the header so that
 // totalwords * 2 is exactly the number of bytes the engine reads.
-
-// The number of body records a story would emit, which is wanted before the
-// buffer is sized. A story that overflows the scan's one-page reach loses
-// its body records (with a warning) rather than its whole style table --
-// geometry and styles are what every story uses, themes are what one might.
-
-static int count_body(styclass *cls, int nclass) {
-	int i, n = 0;
-
-	for(i = 0; i < nclass; i++) {
-		if(cls[i].hasbody) n++;
-	}
-	if(!sty_target->xstysize) return 0;
-	if(n * sty_target->xstysize > USTY_MAX_XSTYBYTES) {
-		swarn("%d style classes carry -iftf-sys-%s- body colors, more than "
-			"the %d bytes a USTY body array can reach (limit %d classes at "
-			"%d bytes each); they were dropped, and SET_BODY will paint the "
-			"interpreter's built-in colors.",
-			n, sty_target->name, USTY_MAX_XSTYBYTES,
-			USTY_MAX_XSTYBYTES / sty_target->xstysize,
-			sty_target->xstysize);
-		return 0;
-	}
-	return n;
-}
 
 static uint8_t *build_usty_flat(uint32_t *sizep) {
 	styclass *cls;
 	int nclass;
 	uint8_t *out;
 	uint32_t size, recoffs, xstyoffs, blockbytes, totalwords;
-	int nbody, nxsty = 0, npadleft = 0, nauto = 0;
+	int nxsty = 0, nover = 0, maxnsty;
 	int i;
 
 	cls = parse_look(&nclass);
 	if(!cls) return 0;
 
-	nbody = count_body(cls, nclass);
-
 	recoffs = USTY_EXT_HDRSIZE;
 	xstyoffs = recoffs + nclass * USTY_FLAT_RECSIZE;
+	maxnsty = sty_target->xstysize?
+		USTY_MAX_XSTYBYTES / sty_target->xstysize : 0;
 
-	// What the engine allocates and blits: the two arrays, rounded up to a
-	// whole number of words because allocwords deals in words. The pad byte
-	// is emitted rather than left implicit, so the engine's readdatato stops
-	// inside the chunk instead of one byte past it.
-	blockbytes = nclass * USTY_FLAT_RECSIZE + nbody * sty_target->xstysize;
-	totalwords = (blockbytes + 1) / 2;
-	size = recoffs + totalwords * 2;
+	// Upper bound: the full body array, which is what the engine's
+	// one-page scan can reach.
+	size = xstyoffs + USTY_MAX_XSTYBYTES;
 
 	out = calloc(1, size);
 	if(!out) {
@@ -767,35 +718,33 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 	out[0] = sty_target->tag | USTY_VERSION_EXT;
 	out[1] = nclass;
 	out[3] = sty_target->xstysize;  // per-target body record stride
-	out[4] = totalwords >> 8;
-	out[5] = totalwords & 0xff;
 	out[6] = (xstyoffs - recoffs) >> 8;     // from the record base, which is
 	out[7] = (xstyoffs - recoffs) & 0xff;   // the pointer the engine holds
 
 	for(i = 0; i < nclass; i++) {
 		make_flat(out + recoffs + i * USTY_FLAT_RECSIZE, &cls[i]);
-		if(cls[i].padleft) npadleft++;
-		if(cls[i].flo == 3) nauto++;
-		if(cls[i].hasbody && nxsty < nbody) {
-			make_xsty(out + xstyoffs + nxsty * sty_target->xstysize,
-				i, &cls[i]);
-			nxsty++;
+		if(cls[i].hasbody) {
+			if(nxsty < maxnsty) {
+				make_xsty(out + xstyoffs + nxsty * sty_target->xstysize,
+					i, &cls[i]);
+				nxsty++;
+			} else {
+				nover++;
+			}
 		}
 	}
-	out[2] = nxsty;
 
-	// See make_flat(): these two are parsed but have nowhere to go in an
-	// eight-byte record. Say so once per story rather than once per class.
-	if(npadleft) {
-		swarn("%d style class%s set a left margin or padding, which a USTY "
-			"record has no room for; it was ignored.",
-			npadleft, (npadleft == 1)? "" : "es");
+	if(nover) {
+		warning(WARN_STYLE, "Too many classes have -iftf-sys-%s- colors (max is %d) so some body styles were dropped.",
+			sty_target->name, maxnsty);
 	}
-	if(nauto) {
-		swarn("%d style class%s set \"margin: auto\", which a USTY record "
-			"cannot encode; the div will not be centered.",
-			nauto, (nauto == 1)? "" : "es");
-	}
+
+	blockbytes = nclass * USTY_FLAT_RECSIZE + nxsty * sty_target->xstysize;
+	totalwords = (blockbytes + 1) / 2; // word = 2 bytes
+	size = recoffs + totalwords * 2; // size is in bytes
+	out[2] = nxsty;
+	out[4] = totalwords >> 8;
+	out[5] = totalwords & 0xff;
 
 	free(cls);
 	*sizep = size;

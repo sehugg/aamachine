@@ -9947,31 +9947,6 @@ initengine4
 	; followed by the two arrays, in
 	; that order, padded to
 	; totalwords*2 bytes.
-	;
-	; totalwords is what makes this
-	; routine free of multiplies. One
-	; allocwords and one readdatato
-	; cover both arrays, where working
-	; the size out from nclass, nxsty
-	; and xstysize costs 45 bytes of
-	; 6502 against 2 bytes of chunk.
-	;
-	; Nothing is kept from the rest of
-	; the header. SET_BODY reads it
-	; again when it wants the body
-	; array, and finds it at
-	; stybase+xstyoff -- one readdata
-	; on a cold path, against three
-	; bytes of zero page held for the
-	; whole run. There are eight free
-	; zero page bytes left in the
-	; engine, so that is the scarcer
-	; side by a wide margin.
-	;
-	; aamshow cross-checks both stated
-	; figures against the counts, so a
-	; stale one is caught at inspection
-	; time rather than read as geometry.
 
 	lda	chnklsb+CH_USTY
 	sta	virdata+2
@@ -9980,11 +9955,11 @@ initengine4
 	lda	chnkmsb+CH_USTY
 	sta	virdata+0
 	lda	#8
-	jsr	readdata
+	jsr	readdata	; read the header
 
 	ldx	databuf+5	; totalwords
 	ldy	databuf+4
-	jsr	allocwords
+	jsr	allocwords	; allocate memory
 	stx	stybase
 	sty	stybase+1
 	stx	phydata
@@ -9996,7 +9971,7 @@ initengine4
 	lda	databuf+4
 	rol
 	sta	physize+1
-	jsr	readdatato
+	jsr	readdatato	; read the data
 
 	lda	chnklsb+CH_CODE
 	sec

@@ -6,13 +6,7 @@
 
 #include "aambundle.h"
 
-// Chunk policy shared by the two 8-bit targets. Neither can do anything with
-// embedded resource files, so those go; everything else is carried over as
-// it stands.
-//
-// This is where a chunk the 6502 engine would rather receive pre-digested
-// gets replaced -- rewrite_chunks() handles the resulting size change, and
-// re-derives the WRIT page alignment from the new offsets.
+// Default rewrite policy for 6502 (called by rewrite_6502_sty)
 
 chunk_action_t rewrite_6502(
 	const char *id,
@@ -22,18 +16,11 @@ chunk_action_t rewrite_6502(
 	uint8_t **newdata,
 	uint32_t *newsize)
 {
+	// drop FILE chunks
 	return strcmp(id, "FILE")? CHUNK_KEEP : CHUNK_DROP;
 }
 
 // The aambox target: no packaging at all, just the rewritten .aastory.
-//
-// aambox is the synthetic 6502 platform the test suite runs the engine on
-// (aambox6502.c loads a frontend blob and a story file). It is not a
-// delivery target, so there is nothing to bundle -- but without it the only
-// stories that ever reach the 6502 engine with a USTY chunk are the ones
-// packed into a .d64 or a ProDOS image, and the automated tests would
-// exercise nothing but the CSS-parsing fallback path. Writing the rewritten
-// story out lets test/*/Makefile run the same transcript through both.
 
 void bundle_aambox(char *filename) {
 	char storyname[256];
