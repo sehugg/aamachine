@@ -40,7 +40,7 @@ void bundle_aambox(char *filename) {
 	FILE *outf;
 
 	visit_chunks(storyname, sizeof(storyname), 0);
-	bundle_sty_set_target("aambox");
+	gen_usty_set_target("aambox");
 	rewrite_chunks(rewrite_6502_sty, 1);
 
 	outf = fopen(filename, "wb");

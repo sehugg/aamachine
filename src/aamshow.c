@@ -192,7 +192,7 @@ void decode_look(struct chunk *ch) {
 // Every array offset follows from the counts, so the header carries none.
 // The xsty record shape follows from the tag's target nibble.
 //
-// Keep in step with the record layouts in bundle_sty.c.
+// Keep in step with the record layouts in gen_usty.c.
 
 static void put_style_bits(uint8_t bits) {
 	int first = 1;

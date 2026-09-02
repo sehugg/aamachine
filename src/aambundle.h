@@ -88,17 +88,17 @@ chunk_action_t rewrite_6502(
 	uint8_t **newdata,
 	uint32_t *newsize);
 
-/* Style precomputation (USTY chunk), implemented in bundle_sty.c. Call
- * bundle_sty_set_target() before rewrite_chunks() on the 8-bit targets;
+/* Style precomputation (USTY chunk), implemented in gen_usty.c. Call
+ * gen_usty_set_target() before rewrite_chunks() on the 8-bit targets;
  * "c64", "apple2" or "aambox". rewrite_6502_sty() is rewrite_6502() plus
  * the USTY chunk inserted right after LOOK. */
 
-void bundle_sty_set_target(const char *target);
+void gen_usty_set_target(const char *target);
 
 /* Call after rewrite_chunks() on a 6502 target: aborts if the interpreter
- * needs a USTY table and none was emitted. See bundle_sty.c.
+ * needs a USTY table and none was emitted. See gen_usty.c.
  */
-void bundle_sty_check(void);
+void gen_usty_check(void);
 
 /* Writes the rewritten story file, with no packaging around it, for the
  * aambox test platform. See bundle_6502.c.

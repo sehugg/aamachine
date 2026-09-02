@@ -166,9 +166,9 @@ void bundle_c64(char *dirname) {
 	visit_chunks(storyname, sizeof(storyname), c64_chunk_visitor);
 	check_charset("c64", AAGLYPH_BITMAP);
 	check_keyboard("c64", AAKBD_C64);
-	bundle_sty_set_target("c64");
+	gen_usty_set_target("c64");
 	rewrite_chunks(rewrite_6502_sty, 1);
-	bundle_sty_check();
+	gen_usty_check();
 
 	fnsize = strlen(dirname) + strlen(storyname) + 64;
 	filename = malloc(fnsize);

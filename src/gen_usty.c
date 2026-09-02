@@ -850,7 +850,7 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 // build_usty*() returning 0, and the story having no LOOK chunk for
 // rewrite_6502_sty() to key off -- land in the same place.
 
-void bundle_sty_check(void) {
+void gen_usty_check(void) {
 	if(sty_target && sty_target->usty_required && !sty_emitted) {
 		warning(WARN_ERROR,
 			"Could not build the %s style table.",
@@ -859,7 +859,7 @@ void bundle_sty_check(void) {
 	}
 }
 
-void bundle_sty_set_target(const char *target) {
+void gen_usty_set_target(const char *target) {
 	sty_target = 0;
 	if(!strcmp(target, "c64")) {
 		sty_target = &sty_c64;

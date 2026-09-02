@@ -872,9 +872,9 @@ void bundle_apple2(char *dirname) {
 	visit_chunks(storyname, sizeof(storyname), apple2_chunk_visitor);
 	check_charset("apple2", AAGLYPH_TRANSLIT);
 	check_keyboard("apple2", AAKBD_APPLE2);
-	bundle_sty_set_target("apple2");
+	gen_usty_set_target("apple2");
 	rewrite_chunks(rewrite_6502_sty, 1);
-	bundle_sty_check();
+	gen_usty_check();
 
 	writefile(dirname, "AAM.SYSTEM", table_a2terp, sizeof(table_a2terp));
 	/* The interpreter reads STORY a page at a time, so round the file up
