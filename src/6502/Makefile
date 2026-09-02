@@ -1,7 +1,7 @@
 VERSION=1.0.3
 CFLAGS=-Wall -O2 -DVERSION=\"$(VERSION)\"
 
-all:			aambox6502 aambox_frontend.bin aambox_frontend_usty.bin c64_crunched.bin c64_drivecode.bin c64_loader.prg a2.system a2_0boot.bin a2_sboot.bin
+all:	aambox6502 aambox_frontend.bin c64_crunched.bin c64_drivecode.bin c64_loader.prg a2.system a2_0boot.bin a2_sboot.bin
 
 check_xa:
 	@if ! command -v xa >/dev/null 2>&1; then \
@@ -20,7 +20,7 @@ check_acme:
 		exit 1; fi
 
 clean:
-			rm -rf aambox6502 aambox_frontend_usty.bin cruncher labels c64.labels mkfont
+			rm -rf aambox6502 aambox_frontend.bin cruncher labels c64.labels mkfont
 			rm -f a2_frontend.bin a2_prorwts2.bin a2.labels a2.system a2_0boot.bin a2_sboot.bin a2_sboot.labels
 
 mkfont:			mkfont.c
@@ -33,15 +33,6 @@ aambox6502:		aambox6502.c fake6502.c
 
 aambox_frontend.bin:	aambox_frontend.s engine.s | check_xa
 			xa -l aambox.labels -o $@ $< -DRAMTOP=49152
-
-# The same frontend with the engine's style sheet parser compiled out, which
-# is how the c64 and apple2 builds ship. Those two have no emulator in the
-# default test suite, so without this the NO_CSS_PARSER path would be
-# assembled but never executed anywhere; test/*/Makefile runs the USTY
-# stories on it.
-
-aambox_frontend_usty.bin:	aambox_frontend.s engine.s | check_xa
-			xa -o $@ $< -DRAMTOP=49152 -DNO_CSS_PARSER=1
 
 c64_frontend.bin:	c64_frontend.s engine.s font.bin | check_xa
 			xa -l c64.labels -o $@ $< -DVERSION=\"$(VERSION)\"

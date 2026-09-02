@@ -2526,11 +2526,6 @@ lastmatrix
 
 c64_footprint = *-c64_entry
 
-; This story always arrives from aambundle, which refuses to write a disk
-; image without a USTY style table, so the engine's style sheet parser has
-; nothing to fall back to and is 802 bytes of dead weight. See initengine4.
-#define NO_CSS_PARSER
-
 #include "engine.s"
 
 	; Anything past this point gets
