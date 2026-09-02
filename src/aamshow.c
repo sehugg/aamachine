@@ -256,46 +256,13 @@ static void decode_xsty(uint8_t *d, uint8_t tag, uint32_t xstyoffs,
 	}
 }
 
-// Revision 11: a flat array of one record per class, in the field order
-// engine.s indexes with stybase + class * 8.
+// The record array, shared by revisions 11 and 12 -- revision 12 changed the
+// header and nothing below it.
 
-static void decode_usty_flat(uint8_t *d, uint32_t size, uint8_t tag) {
-	uint8_t nclass, nxsty, xstysize;
-	uint32_t recoffs, xstyoffs;
+static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
+	uint8_t nclass, uint32_t xstyoffs, uint8_t nxsty, uint8_t xstysize)
+{
 	int i;
-
-	if(size < USTY_FLAT_HDRSIZE) {
-		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
-		return;
-	}
-
-	nclass = d[1];
-	nxsty = d[2];
-	xstysize = d[3];
-
-	// No offsets in the header: the records sit at a fixed offset and the
-	// body records follow them, so both bases are computed the same way
-	// here as in the engine.
-	recoffs = USTY_FLAT_HDRSIZE;
-	xstyoffs = recoffs + nclass * USTY_FLAT_RECSIZE;
-
-	printf("nclass: %d  nxsty: %d", nclass, nxsty);
-	if(nxsty) {
-		printf(" (%d bytes each)", xstysize);
-	} else if(!xstysize) {
-		printf(" (target has no body records)");
-	}
-	printf("\n");
-	printf("Offsets: rec %u  xsty %u\n", recoffs, xstyoffs);
-
-	if(nxsty && !xstysize) {
-		printf("Warning: %d body records declared with a record size of 0.\n", nxsty);
-		return;
-	}
-	if(xstyoffs + nxsty * xstysize > size) {
-		printf("Warning: table extends past the end of the chunk (%u bytes).\n", size);
-		return;
-	}
 
 	printf("\nClass records (%d bytes each):\n", USTY_FLAT_RECSIZE);
 	for(i = 0; i < nclass; i++) {
@@ -341,6 +308,120 @@ static void decode_usty_flat(uint8_t *d, uint32_t size, uint8_t tag) {
 	printf("\n");
 }
 
+// Revision 11: a flat array of one record per class, in the field order
+// engine.s indexes with stybase + class * 8. No offsets in the header: the
+// records sit at a fixed offset and the body records follow them, so both
+// bases are computed the same way here as in the engine.
+
+static void decode_usty_flat(uint8_t *d, uint32_t size, uint8_t tag) {
+	uint8_t nclass, nxsty, xstysize;
+	uint32_t recoffs, xstyoffs;
+
+	if(size < USTY_FLAT_HDRSIZE) {
+		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
+		return;
+	}
+
+	nclass = d[1];
+	nxsty = d[2];
+	xstysize = d[3];
+
+	recoffs = USTY_FLAT_HDRSIZE;
+	xstyoffs = recoffs + nclass * USTY_FLAT_RECSIZE;
+
+	printf("nclass: %d  nxsty: %d", nclass, nxsty);
+	if(nxsty) {
+		printf(" (%d bytes each)", xstysize);
+	} else if(!xstysize) {
+		printf(" (target has no body records)");
+	}
+	printf("\n");
+	printf("Offsets: rec %u  xsty %u\n", recoffs, xstyoffs);
+
+	if(nxsty && !xstysize) {
+		printf("Warning: %d body records declared with a record size of 0.\n", nxsty);
+		return;
+	}
+	if(xstyoffs + nxsty * xstysize > size) {
+		printf("Warning: table extends past the end of the chunk (%u bytes).\n", size);
+		return;
+	}
+
+	decode_usty_records(d, tag, recoffs, nclass, xstyoffs, nxsty, xstysize);
+}
+
+// Revision 12: revision 11's arrays under a header that also states the size
+// of the resident block and where the body array starts inside it. Both are
+// derivable from the counts, so they are cross-checked here -- a stale offset
+// disagreeing with a count is the one hazard stating them reintroduces, and
+// this is where it gets caught.
+
+static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
+	uint8_t nclass, nxsty, xstysize;
+	uint32_t recoffs, xstyoffs, totalwords, xstyrel;
+	uint32_t wantxsty, wantwords, blockbytes;
+
+	if(size < USTY_EXT_HDRSIZE) {
+		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
+		return;
+	}
+
+	nclass = d[1];
+	nxsty = d[2];
+	xstysize = d[3];
+	totalwords = (d[4] << 8) | d[5];
+	xstyrel = (d[6] << 8) | d[7];
+
+	recoffs = USTY_EXT_HDRSIZE;
+	xstyoffs = recoffs + xstyrel;
+
+	printf("nclass: %d  nxsty: %d", nclass, nxsty);
+	if(nxsty) {
+		printf(" (%d bytes each)", xstysize);
+	} else if(!xstysize) {
+		printf(" (target has no body records)");
+	}
+	printf("\n");
+	printf("Offsets: rec %u  xsty %u  (%u words resident)\n",
+		recoffs, xstyoffs, totalwords);
+
+	if(nxsty && !xstysize) {
+		printf("Warning: %d body records declared with a record size of 0.\n", nxsty);
+		return;
+	}
+	if(xstysize > USTY_MAX_XSTYSIZE) {
+		printf("Warning: body record of %d bytes does not fit databuf (max %d).\n",
+			xstysize, USTY_MAX_XSTYSIZE);
+	}
+	if(nxsty * xstysize > USTY_MAX_XSTYBYTES) {
+		printf("Warning: body array of %d bytes is past the scan's one-page reach (max %d).\n",
+			nxsty * xstysize, USTY_MAX_XSTYBYTES);
+	}
+
+	// The two stated figures against the two counts.
+	wantxsty = nclass * USTY_FLAT_RECSIZE;
+	blockbytes = wantxsty + nxsty * xstysize;
+	wantwords = (blockbytes + 1) / 2;
+	if(xstyrel != wantxsty) {
+		printf("Warning: header says the body array is at +%u, but %d classes "
+			"of %d bytes put it at +%u.\n",
+			xstyrel, nclass, USTY_FLAT_RECSIZE, wantxsty);
+		return;
+	}
+	if(totalwords != wantwords) {
+		printf("Warning: header says %u words resident, but the counts need %u.\n",
+			totalwords, wantwords);
+		return;
+	}
+	if(recoffs + totalwords * 2 != size) {
+		printf("Warning: chunk is %u bytes; the header describes %u.\n",
+			size, recoffs + totalwords * 2);
+		return;
+	}
+
+	decode_usty_records(d, tag, recoffs, nclass, xstyoffs, nxsty, xstysize);
+}
+
 void decode_usty(struct chunk *ch) {
 	uint8_t *d = ch->data;
 	uint32_t size = ch->size;
@@ -369,9 +450,12 @@ void decode_usty(struct chunk *ch) {
 	case USTY_VERSION_FLAT:
 		decode_usty_flat(d, size, tag);
 		break;
+	case USTY_VERSION_EXT:
+		decode_usty_ext(d, size, tag);
+		break;
 	default:
-		printf("Cannot decode USTY format version %d; this aamshow knows %d.\n",
-			tag & 0x0f, USTY_VERSION_FLAT);
+		printf("Cannot decode USTY format version %d; this aamshow knows %d and %d.\n",
+			tag & 0x0f, USTY_VERSION_FLAT, USTY_VERSION_EXT);
 		break;
 	}
 }

@@ -9933,14 +9933,45 @@ done
 	rts
 
 initengine4
-	; Read the style table from the USTY chunk.
-	; Array base is stored at stybase.
+	; Read the style table from the USTY
+	; chunk (revision 12). Both arrays
+	; are blitted to the heap and
+	; stybase points at the first one.
 	;
 	; The header is
-	;   0 tag  1 nclass
-	;   2 nxsty  3 xstysize
-	; followed by the records.
-	; virdata points to the xsty table after the read.
+	;   0 tag       1 nclass
+	;   2 nxsty     3 xstysize
+	;   4 totalwords (b-e)
+	;   6 xstyoff   (b-e, from the
+	;                record base)
+	; followed by the two arrays, in
+	; that order, padded to
+	; totalwords*2 bytes.
+	;
+	; totalwords is what makes this
+	; routine free of multiplies. One
+	; allocwords and one readdatato
+	; cover both arrays, where working
+	; the size out from nclass, nxsty
+	; and xstysize costs 45 bytes of
+	; 6502 against 2 bytes of chunk.
+	;
+	; Nothing is kept from the rest of
+	; the header. SET_BODY reads it
+	; again when it wants the body
+	; array, and finds it at
+	; stybase+xstyoff -- one readdata
+	; on a cold path, against three
+	; bytes of zero page held for the
+	; whole run. There are eight free
+	; zero page bytes left in the
+	; engine, so that is the scarcer
+	; side by a wide margin.
+	;
+	; aamshow cross-checks both stated
+	; figures against the counts, so a
+	; stale one is caught at inspection
+	; time rather than read as geometry.
 
 	lda	chnklsb+CH_USTY
 	sta	virdata+2
@@ -9948,40 +9979,23 @@ initengine4
 	sta	virdata+1
 	lda	chnkmsb+CH_USTY
 	sta	virdata+0
-	lda	#4
+	lda	#8
 	jsr	readdata
 
-	lda	databuf+1
-	sta	count		; nclass
-
-	; allocwords takes a word count,
-	; so nclass*8 bytes is nclass*4
-
-	lda	#0
-	sta	temp
-	lda	count
-	asl
-	rol	temp
-	asl
-	rol	temp
-	tax
-	ldy	temp
+	ldx	databuf+5	; totalwords
+	ldy	databuf+4
 	jsr	allocwords
 	stx	stybase
 	sty	stybase+1
 	stx	phydata
 	sty	phydata+1
 
-	lda	#0
-	sta	physize+1
-	lda	count
+	lda	databuf+5
 	asl
-	rol	physize+1
-	asl
-	rol	physize+1
-	asl
-	rol	physize+1
 	sta	physize
+	lda	databuf+4
+	rol
+	sta	physize+1
 	jsr	readdatato
 
 	lda	chnklsb+CH_CODE

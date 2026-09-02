@@ -10,9 +10,11 @@
 // USTY chunk generation: precomputed style table for the 6502 engines.
 //
 // Parses the LOOK chunk (CSS declarations) once, in C, and emits the compact
-// binary table defined in STYLE_SPEC.md. The 6502 engines will later read
-// this instead of parsing CSS at boot. For now the LOOK chunk stays in
-// place; this only adds a chunk.
+// binary table defined in STYLE_SPEC.md. USTY replaces LOOK on the 6502
+// targets: the c64 and apple2 interpreters have no style sheet parser left
+// (NO_CSS_PARSER), so the table is a requirement rather than an
+// optimization, and gen_usty_check() aborts the bundle if one cannot be
+// built.
 //
 // The parser mirrors both the dialog compiler's effective CSS subset
 // (~/if/dialog/src/frontend.c:2899-3000) and the 6502 engine's parser
@@ -40,6 +42,12 @@
 // target whose frontend has a different palette shape declares its own; one
 // with no body records at all declares 0.
 #define XSTY_SIZE_C64 7
+
+// A body record has to fit databuf on the 6502 (engine.s:138), which is what
+// keeps a readdata-based reader available to a target too tight to hold the
+// array resident. Caught here rather than in a comment, because the number
+// lives in struct sty_target and a new target would set its own.
+typedef char xsty_fits_databuf[(XSTY_SIZE_C64 <= USTY_MAX_XSTYSIZE)? 1 : -1];
 
 // A body record's eleven colors, in xsty nibble order. Only declarations
 // that name the target explicitly (-iftf-sys-c64-background-color and
@@ -772,52 +780,88 @@ static styclass *parse_look(int *nclassp) {
 	return cls;
 }
 
-// Revision 11: one 8-byte record per class, no dedup, no index table.
+// Revision 12: one 8-byte record per class, no dedup, no index table, and a
+// header that states what the engine would otherwise have to work out.
 //
-// Bigger than revision 9 on a story whose classes repeat, smaller on one
-// whose classes are mostly distinct, and much simpler for the engine: the
-// record for class n is at stybase + n * 8, which is the addressing
-// engine.s already used for the table it built by parsing CSS. So the
-// engine reads this by allocating nclass * 8 bytes and blitting, and the
-// CSS parser goes away.
+// The record array is revision 11's, byte for byte: the record for class n
+// is at stybase + n * 8, which is the addressing engine.s already used for
+// the table it built by parsing CSS. What revision 12 adds is two header
+// figures -- the total size of the resident block and the offset of the body
+// array within it -- so that initengine4 is one allocwords and one
+// readdatato with no multiplies at all. Deriving those two in the engine
+// instead costs 45 bytes of 6502; stating them costs 4 bytes of chunk.
 //
-// The header states no offsets. The records begin at a fixed offset and the
-// body records begin immediately after them, which the 6502 gets for free:
-// readdata advances virdata past what it read, so the pointer is already
-// where the xsty scan wants to start.
+// The payload is padded to an even length after the header so that
+// totalwords * 2 is exactly the number of bytes the engine reads.
+
+// The number of body records a story would emit, which is wanted before the
+// buffer is sized. A story that overflows the scan's one-page reach loses
+// its body records (with a warning) rather than its whole style table --
+// geometry and styles are what every story uses, themes are what one might.
+
+static int count_body(styclass *cls, int nclass) {
+	int i, n = 0;
+
+	for(i = 0; i < nclass; i++) {
+		if(cls[i].hasbody) n++;
+	}
+	if(!sty_target->xstysize) return 0;
+	if(n * sty_target->xstysize > USTY_MAX_XSTYBYTES) {
+		swarn(			"%d style classes carry -iftf-sys-%s- body colors, more than "
+			"the %d bytes a USTY body array can reach (limit %d classes at "
+			"%d bytes each); they were dropped, and SET_BODY will paint the "
+			"interpreter's built-in colors.",
+			n, sty_target->name, USTY_MAX_XSTYBYTES,
+			USTY_MAX_XSTYBYTES / sty_target->xstysize,
+			sty_target->xstysize);
+		return 0;
+	}
+	return n;
+}
 
 static uint8_t *build_usty_flat(uint32_t *sizep) {
 	styclass *cls;
 	int nclass;
 	uint8_t *out;
-	uint32_t size, recoffs, xstyoffs;
-	int nxsty = 0, npadleft = 0, nauto = 0;
+	uint32_t size, recoffs, xstyoffs, blockbytes, totalwords;
+	int nbody, nxsty = 0, npadleft = 0, nauto = 0;
 	int i;
 
 	cls = parse_look(&nclass);
 	if(!cls) return 0;
 
-	recoffs = USTY_FLAT_HDRSIZE;
+	nbody = count_body(cls, nclass);
+
+	recoffs = USTY_EXT_HDRSIZE;
 	xstyoffs = recoffs + nclass * USTY_FLAT_RECSIZE;
-	size = xstyoffs;
-	for(i = 0; i < nclass; i++) {
-		if(cls[i].hasbody) size += sty_target->xstysize;
-	}
-	out = malloc(size);
+
+	// What the engine allocates and blits: the two arrays, rounded up to a
+	// whole number of words because allocwords deals in words. The pad byte
+	// is emitted rather than left implicit, so the engine's readdatato stops
+	// inside the chunk instead of one byte past it.
+	blockbytes = nclass * USTY_FLAT_RECSIZE + nbody * sty_target->xstysize;
+	totalwords = (blockbytes + 1) / 2;
+	size = recoffs + totalwords * 2;
+
+	out = calloc(1, size);
 	if(!out) {
 		warning(WARN_ERROR, "Out of memory");
 		exit(1);
 	}
 
-	out[0] = sty_target->tag | USTY_VERSION_FLAT;
+	out[0] = sty_target->tag | USTY_VERSION_EXT;
 	out[1] = nclass;
 	out[3] = sty_target->xstysize;  // per-target body record stride
+	out[4] = totalwords >> 8;
+	out[5] = totalwords & 0xff;
+	out[6] = (xstyoffs - recoffs) >> 8;     // from the record base, which is
+	out[7] = (xstyoffs - recoffs) & 0xff;   // the pointer the engine holds
 
 	for(i = 0; i < nclass; i++) {
 		make_flat(out + recoffs + i * USTY_FLAT_RECSIZE, &cls[i]);
 		if(cls[i].padleft) npadleft++;
 		if(cls[i].flo == 3) nauto++;
-		if(cls[i].hasbody) {
+		if(cls[i].hasbody && nxsty < nbody) {
 			make_xsty(out + xstyoffs + nxsty * sty_target->xstysize,
 				i, &cls[i]);
 			nxsty++;

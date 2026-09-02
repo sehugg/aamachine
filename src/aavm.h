@@ -183,7 +183,8 @@
 // The USTY version number is internal, mainly to prevent devs from confusing
 // themselves, so it should be incremented often and can wrap (0..15)
 #define USTY_VERSION_FLAT	11
-#define USTY_VERSION		USTY_VERSION_FLAT
+#define USTY_VERSION_EXT	12
+#define USTY_VERSION		USTY_VERSION_EXT
 
 // Revision 11. The header is four bytes because the flat layout needs no
 // stated offsets: the records start at a fixed offset, and the body records
@@ -192,7 +193,29 @@
 #define USTY_FLAT_HDRSIZE	4
 #define USTY_FLAT_RECSIZE	8
 
-// Field order within a revision 11 record. This is engine.s's STY_* order
+// Revision 12 keeps revision 11's record array byte for byte and spends four
+// more header bytes on two figures the engine would otherwise have to
+// compute: the size of the whole resident block, and where the body array
+// starts inside it. Measured, that trade is 4 bytes of chunk against ~39
+// bytes of engine code -- see STYLE_SPEC.md, "Revision 12".
+//
+//   4-5  totalwords   heap to allocate, in words, big-endian
+//   6-7  xstyoff      body array offset from the *record base*, big-endian
+//
+// The payload after the header is padded to totalwords * 2 bytes, so the
+// engine's single readdatato reads exactly the chunk and stops.
+#define USTY_EXT_HDRSIZE	8
+
+// A body record must fit databuf (engine.s:138), which is what keeps a
+// readdata-based reader possible on a target too tight to hold the array
+// resident. Nothing needs one that wide today; the cap costs nothing.
+#define USTY_MAX_XSTYSIZE	8
+
+// The body array is scanned with a Y-indexed loop, so it has to fit in one
+// page. At the c64's 7-byte record that is 36 body classes.
+#define USTY_MAX_XSTYBYTES	255
+
+// Field order within a revision 11/12 record. This is engine.s's STY_* order
 // (engine.s:162), which is the reason the engine's four read sites are
 // untouched; byte 7 is the spare the CSS parser never filled.
 #define USTY_F_WIDTH		0
