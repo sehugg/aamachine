@@ -2,6 +2,8 @@
 #define mkdir(Path, Mode) mkdir(Path)
 #endif
 
+#include <stdarg.h>
+
 typedef void (*chunk_visitor_t)(char *head, char *dirname, uint8_t *chunk, uint32_t size);
 
 extern uint8_t *story;
@@ -65,6 +67,7 @@ typedef enum {
 /* Print a warning. Unless the warning was forced on with --warn-<kind>,
  * a hint suggesting its disabling flag is printed after the message. */
 void warning(warn_id_t id, const char *fmt, ...);
+void vwarning(warn_id_t id, const char *fmt, va_list ap);
 
 /* Warn about codepoints the story declares that the target cannot render */
 void check_charset(const char* target_name, int aaglyph_flags);

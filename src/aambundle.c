@@ -48,8 +48,7 @@ static const struct {
 	{"style",    &style_warning_level}
 };
 
-void warning(warn_id_t id, const char *fmt, ...) {
-	va_list ap;
+void vwarning(warn_id_t id, const char *fmt, va_list ap) {
 	char msg[1024];
 
 	// --no-warn-* really turns the warning off, not just the hint. The
@@ -57,9 +56,7 @@ void warning(warn_id_t id, const char *fmt, ...) {
 	// or --no-warn-* (WARN_NEVER) change it.
 	if(id < WARN_COUNT && warn_info[id].level && *warn_info[id].level == WARN_NEVER) return;
 
-	va_start(ap, fmt);
 	vsnprintf(msg, sizeof(msg), fmt, ap);
-	va_end(ap);
 
 	fprintf(stderr, "%s %s\n", id==WARN_ERROR || warnings_as_errors ? "Error:" : "Warning:", msg);
 	if(id < WARN_COUNT && warn_info[id].level && *warn_info[id].level != WARN_ALWAYS) {
@@ -70,6 +67,13 @@ void warning(warn_id_t id, const char *fmt, ...) {
 		}
 	}
 	nwarning++;
+}
+
+void warning(warn_id_t id, const char *fmt, ...) {
+	va_list ap;
+	va_start(ap, fmt);
+	vwarning(id, fmt, ap);
+	va_end(ap);
 }
 
 static int append_name(char *storyname, int storynamesize, int snamelen, char ch) {

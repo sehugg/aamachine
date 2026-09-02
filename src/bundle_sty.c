@@ -222,6 +222,20 @@ static const struct {
 
 // Map an rgb triplet to the nearest VIC-II color, using a perceptual
 // distance (weighted RGB, a standard cheap approximation of CIE lightness).
+// Style warnings, routed through swarn() so that they can be silenced
+// while parsing declarations that a -iftf-sys- declaration in the same
+// class overrides anyway: the prefixed pass is the author speaking to this
+// machine, and it gets to say what it replaces.
+static int sty_quiet;
+
+static void swarn(const char *fmt, ...) {
+	va_list ap;
+	if(sty_quiet) return;
+	va_start(ap, fmt);
+	vwarning(WARN_STYLE, fmt, ap);
+	va_end(ap);
+}
+
 static int rgb_to_c64(int r, int g, int b) {
 	int best = 0, bestdist = 0x7fffffff;
 	int i;
@@ -237,7 +251,7 @@ static int rgb_to_c64(int r, int g, int b) {
 		}
 	}
 	if(bestdist > (2+3+4)*48*48) {
-		warning(WARN_STYLE, "The color #%02x%02x%02x is not accurately represented on %s.",
+		swarn("The color #%02x%02x%02x is not accurately represented on %s.",
 			r, g, b, sty_target->name);
 	}
 	return best;
@@ -307,7 +321,7 @@ static int parse_color(const char *v, int *out) {
 			*out = n;
 			return 1;
 		}
-		warning(WARN_STYLE, "Invalid VIC color index \"%s\", must be in range 0..15.", v_old);
+		swarn("Invalid VIC color index \"%s\", must be in range 0..15.", v_old);
 		return 0;
 	} else {
 		int vic = -1;
@@ -318,7 +332,7 @@ static int parse_color(const char *v, int *out) {
 			}
 		}
 		if(vic < 0) {
-			warning(WARN_STYLE, "Unknown c64 color \"%s\".", v);
+			swarn("Unknown c64 color \"%s\".", v);
 			return 0;
 		}
 		*out = vic;
@@ -333,104 +347,29 @@ static int parse_color(const char *v, int *out) {
 // ----------------------------------------------------------------------------
 // CSS value parsing.
 
-static int isabsunit(const char *v) {
-	return (v[0] == 'e' && (v[1] == 'm' || v[1] == 'n'))
-		|| (v[0] == 'c' && v[1] == 'h');
-}
+// Length scan, in the spirit of frontend.c's "sscanf(str, "width : %d %s")":
+// one sscanf picks the number and the unit apart whatever whitespace sits
+// between them. %f rather than %d so that the fractional part is truncated
+// the way css_abs_rel in engine.s truncates it (".67em" is 0, not 67 rows).
+// The first-character guard keeps scanf's "nan"/"inf" extensions out.
+// Returns the number of conversions: 0 = not a length, 1 = bare number,
+// 2 = number and unit (*unit is then "" for a bare number, "%" or
+// "em"/"ch"/"en").
+static int scan_length(const char *value, int *val, char *unit) {
+	float f;
+	int n;
 
-// Parse a length, mirroring css_abs_rel in engine.s: an optional leading
-// decimal point, then digits, then an optional fractional part (both dot
-// forms are truncated -- ".3em" is 0, exactly as the engine computes), then
-// a unit. Returns 0 on failure, 1 on success; *unit 0 = absolute,
-// 1 = percent. *flags reports what was lost so the caller can warn:
-//   PLEN_FRAC  a fractional part was dropped
-//   PLEN_OVER  the value exceeds 255, the engine's one-byte storage, and
-//              will wrap
-#define PLEN_FRAC	1
-#define PLEN_OVER	2
-
-static int parse_length(const char *v, int *val, int *unit, int *flags) {
-	long n = 0;
-	int frac = 0;
-
-	*flags = 0;
-	if(*v == '.') {
-		// ".3em" is 0.3em on the web, so there is no integer part to
-		// accumulate -- the digits after the dot are the fractional part
-		// and get dropped below. Reading them as the integer part turned
-		// "margin-top:.3em" into three blank rows.
-		if(v[1] < '0' || v[1] > '9') return 0;
-	} else {
-		if(*v < '0' || *v > '9') return 0;
-		while(*v >= '0' && *v <= '9') {
-			if(n < 1000000) n = n * 10 + (*v - '0');
-			v++;
-		}
-	}
-	// Truncated, not rounded, which is what css_abs_rel in engine.s does.
-	while(*v == '.') {
-		frac = 1;
-		v++;
-		while(*v >= '0' && *v <= '9') v++;
-	}
-	if(n > 255) *flags |= PLEN_OVER;
-	if(frac) *flags |= PLEN_FRAC;
-	if(*v == '%') {
-		*val = (int) n;
-		*unit = 1;
-		return 1;
-	}
-	if(isabsunit(v)) {
-		*val = (int) n;
-		*unit = 0;
-		return 1;
-	}
-	return 0;
-}
-
-// Warn about a length declaration the 8-bit machine will not honor the way
-// the web would. prop is the CSS property, value the raw text; val/st/unit/
-// flags come from parse_length(). relok says whether a percent is
-// meaningful for this property (true for width/height, false for margins).
-static void warn_length(const char *prop, const char *value, int val, int st, int unit, int flags, int relok) {
-	if(st) {
-		if(flags & PLEN_FRAC) {
-			//warning(WARN_STYLE, "Fractional %s \"%s\" is truncated.", prop, value);
-		}
-		if(unit) {
-			// Percent. A width or height above 100% means "bigger than the
-			// whole screen" -- the web lays that out by overflowing, an
-			// 8-bit machine cannot. (For height it is doubly pointless:
-			// the engine treats any relative height as one row.) Margins
-			// reject percent outright, below.
-			if(relok && val > 100) {
-				warning(WARN_STYLE,
-					"Percent %s \"%s\" is more than 100%% and will not fit the screen.",
-					prop, value);
-			} else if(!relok) {
-				warning(WARN_STYLE, "Percent %s \"%s\" is not supported and was ignored.", prop, value);
-			}
-		} else if(flags & PLEN_OVER) {
-			// An absolute (em/ch) length that no 8-bit screen can show.
-			int max = relok? sty_target->maxcols : sty_target->maxrows;
-			warning(WARN_STYLE,
-				"%s \"%s\" is more than %s's %d %s and will be clamped.",
-				prop, value, sty_target->name, max,
-				relok? "columns" : "rows");
-		}
-	} else {
-		warning(WARN_STYLE, "Ignoring %s: unsupported value \"%s\".", prop, value);
-	}
-}
-
-// Whole-value case-insensitive match, ignoring trailing whitespace.
-static int matchval(const char *value, const char *word) {
-	size_t len = strlen(word);
-
-	if(strncasecmp(value, word, len)) return 0;
-	value += len;
 	while(*value == ' ' || *value == '\t') value++;
-	return !*value;
+	if((*value < '0' || *value > '9') && *value != '.') return 0;
+	unit[0] = 0;
+	n = sscanf(value, "%f %15s", &f, unit);
+	if(n < 1) return 0;
+	*val = (int) f;         // truncated, like the engine
+	return n;
+}
+
+static int isabsunit(const char *unit) {
+	return !strcmp(unit, "em") || !strcmp(unit, "ch") || !strcmp(unit, "en");
 }
 
 // Parse one null-terminated declaration, e.g. "width: 100%" or
@@ -487,9 +426,12 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	if(prefixed != pass) return;
 
 	if(!strcmp(key, "-iftf-text-decoration")) {
-		if(matchval(value, "reverse")) c->styon |= AASTYLE_REVERSE;
-		else if(matchval(value, "none")) c->styoff |= AASTYLE_REVERSE;
-		else warning(WARN_STYLE, "Invalid value for %s: %s", key, value);
+		char param[32];
+		if(1 == sscanf(value, "%31s", param)) {
+			if(!strcmp(param, "reverse")) c->styon |= AASTYLE_REVERSE;
+			else if(!strcmp(param, "none")) c->styoff |= AASTYLE_REVERSE;
+			else swarn("Invalid value for %s: %s", key, value);
+		}
 		return;
 	}
 
@@ -512,94 +454,125 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 		}
 	}
 
-	if(!strcmp(key, "width")) {
-		int val, unit, flags, st;
-		st = parse_length(value, &val, &unit, &flags);
-		if(st == 1) {
-			c->width = val;
-			if(unit) c->flags |= STY_RELW;
+	if(!strcmp(key, "width") || !strcmp(key, "height")) {
+		int v;
+		char unit[16];
+		int n = scan_length(value, &v, unit);
+		matched = 1;
+		if(n == 2 && !strcmp(unit, "%")) {
+			if(v > 100) {
+				// Bigger than the whole screen; the web overflows, an
+				// 8-bit machine cannot. (For height it is doubly
+				// pointless: the engine treats any relative height as
+				// one row.)
+				swarn("Percent %s \"%s\" is more than 100%% and will not fit the screen.",
+					key, value);
+			}
+			if(*key == 'w') {
+				c->width = v;
+				c->flags |= STY_RELW;
+			} else {
+				c->height = v;
+				c->flags |= STY_RELH;
+			}
+		} else if(n >= 1 && (!unit[0] || isabsunit(unit))) {
+			// Bare number or em/ch/en: absolute.
+			if(*key == 'w') c->width = v;
+			else c->height = v;
+		} else {
+			swarn("Ignoring %s: unsupported value \"%s\".", key, value);
 		}
-		warn_length(key, value, val, st, unit, flags, 1);
+	} else if(!strcmp(key, "margin-top") || !strcmp(key, "margin-bottom")
+		|| !strcmp(key, "margin-left") || !strcmp(key, "padding-left")) {
+		int v;
+		char unit[16];
+		int n = scan_length(value, &v, unit);
 		matched = 1;
-	} else if(!strcmp(key, "height")) {
-		int val, unit, flags, st;
-		st = parse_length(value, &val, &unit, &flags);
-		if(st == 1) {
-			c->height = val;
-			if(unit) c->flags |= STY_RELH;
+		if(n >= 1 && (!unit[0] || isabsunit(unit))) {
+			// Absolute only: a percent of what, on a text screen?
+			if(!strcmp(key, "margin-top")) c->mtop = v;
+			else if(!strcmp(key, "margin-bottom")) c->mbottom = v;
+			else c->padleft = v;
+		} else if(n == 2 && !strcmp(unit, "%")) {
+			swarn("Percent %s \"%s\" is not supported and was ignored.", key, value);
+		} else {
+			swarn("Ignoring %s: unsupported value \"%s\".", key, value);
 		}
-		warn_length(key, value, val, st, unit, flags, 1);
-		matched = 1;
-	} else if(!strcmp(key, "margin-top")) {
-		int val, unit, flags, st;
-		st = parse_length(value, &val, &unit, &flags);
-		if(st == 1 && !unit) c->mtop = val;
-		warn_length(key, value, val, st, unit, flags, 0);
-		matched = 1;
-	} else if(!strcmp(key, "margin-bottom")) {
-		int val, unit, flags, st;
-		st = parse_length(value, &val, &unit, &flags);
-		if(st == 1 && !unit) c->mbottom = val;
-		warn_length(key, value, val, st, unit, flags, 0);
-		matched = 1;
-	} else if(!strcmp(key, "margin-left") || !strcmp(key, "padding-left")) {
-		int val, unit, flags, st;
-		st = parse_length(value, &val, &unit, &flags);
-		if(st == 1 && !unit) c->padleft = val;
-		warn_length(key, value, val, st, unit, flags, 0);
-		matched = 1;
 	} else if(!strcmp(key, "float")) {
+		char param[32];
 		matched = 1;
-		if(matchval(value, "left")) c->flo = 1;
-		else if(matchval(value, "right")) c->flo = 2;
-		else if(!matchval(value, "none") && !matchval(value, "inherit")) {
-			warning(WARN_STYLE, "Invalid value for float: %s (only left, right and none are supported).", value);
+		if(1 == sscanf(value, "%31s", param)) {
+			if(!strcmp(param, "left")) c->flo = 1;
+			else if(!strcmp(param, "right")) c->flo = 2;
+			else if(strcmp(param, "none") && strcmp(param, "inherit")) {
+				swarn("Invalid value for float: %s (only left, right and none are supported).", value);
+			}
 		}
 	} else if(!strcmp(key, "margin")) {
+		char param[32];
 		matched = 1;
-		if(matchval(value, "auto")) c->flo = 3;
-		else warning(WARN_STYLE, "Invalid value for margin: %s (use \"margin: auto\").", value);
+		if(1 == sscanf(value, "%31s", param)) {
+			if(!strcmp(param, "auto")) c->flo = 3;
+			else swarn("Invalid value for margin: %s (use \"margin: auto\").", value);
+		}
 	} else if(!strcmp(key, "text-align")) {
+		char param[32];
 		matched = 1;
-		if(matchval(value, "center")) c->align = 3;
-		else if(matchval(value, "right")) c->align = 2;
-		else if(matchval(value, "left")) c->align = 1;
-		else if(!matchval(value, "inherit")) {
-			warning(WARN_STYLE, "Invalid value for text-align: %s (only left, right and center are supported).", value);
+		if(1 == sscanf(value, "%31s", param)) {
+			if(!strcmp(param, "center")) c->align = 3;
+			else if(!strcmp(param, "right")) c->align = 2;
+			else if(!strcmp(param, "left")) c->align = 1;
+			else if(strcmp(param, "inherit")) {
+				swarn("Invalid value for text-align: %s (only left, right and center are supported).", value);
+			}
 		}
 	} else if(!strcmp(key, "font-style")) {
+		char param[32];
 		matched = 1;
-		if(matchval(value, "italic") || matchval(value, "oblique")) c->styon |= AASTYLE_ITALIC;
-		else if(matchval(value, "normal")) c->styoff |= AASTYLE_ITALIC;
-		else if(!matchval(value, "inherit")) {
-			warning(WARN_STYLE, "Invalid value for font-style: %s (only italic, oblique and normal are supported).", value);
+		if(1 == sscanf(value, "%31s", param)) {
+			if(!strcmp(param, "italic") || !strcmp(param, "oblique"))
+				c->styon |= AASTYLE_ITALIC;
+			else if(!strcmp(param, "normal")) c->styoff |= AASTYLE_ITALIC;
+			else if(strcmp(param, "inherit")) {
+				swarn("Invalid value for font-style: %s (only italic, oblique and normal are supported).", value);
+			}
 		}
 	} else if(!strcmp(key, "font-weight")) {
+		char param[32];
 		matched = 1;
-		if(matchval(value, "bold")) c->styon |= AASTYLE_BOLD;
-		else if(matchval(value, "normal")) c->styoff |= AASTYLE_BOLD;
-		else if(!matchval(value, "inherit")) {
-			// In particular: numeric weights (400, 700) are valid web CSS
-			// but mean nothing here.
-			warning(WARN_STYLE, "Invalid value for font-weight: %s (only bold and normal are supported).", value);
+		if(1 == sscanf(value, "%31s", param)) {
+			if(!strcmp(param, "bold")) c->styon |= AASTYLE_BOLD;
+			else if(!strcmp(param, "normal")) c->styoff |= AASTYLE_BOLD;
+			else if(strcmp(param, "inherit")) {
+				// In particular: numeric weights (400, 700) are valid web
+				// CSS but mean nothing here.
+				swarn("Invalid value for font-weight: %s (only bold and normal are supported).", value);
+			}
 		}
 	} else if(!strcmp(key, "font-family")) {
+		char param[32];
 		matched = 1;
+		// %s stops at the first whitespace, so use the whole value for
+		// the monospace test, frontend.c-style.
+		sscanf(value, "%31s", param);
 		if(strstr(value, "monospace")) c->styon |= AASTYLE_FIXED;
-		else if(!matchval(value, "inherit")) c->styoff |= AASTYLE_FIXED;
+		else if(strcmp(param, "inherit")) c->styoff |= AASTYLE_FIXED;
 	} else if(!strcmp(key, "text-decoration") || !strcmp(key, "reverse-video")) {
+		char param[32];
 		matched = 1;
+		sscanf(value, "%31s", param);
+		// "reverse" is not a standard CSS value, but there is no standard
+		// CSS property for reverse video, and unrecognized values are
+		// explicitly not an error in CSS.
 		if(strstr(value, "reverse")) {
 			c->styon |= AASTYLE_REVERSE;
-		} else if(matchval(value, "inherit")) {
-			// Nothing: inherit is the no-op.
-		} else {
+		} else if(strcmp(param, "inherit")) {
 			// "none" is the explicit off; any other value (underline is
 			// the classic web one) neither sets nor unsets reverse on
 			// the web, so warn rather than quietly turning it off.
 			c->styoff |= AASTYLE_REVERSE;
-			if(!strcmp(key, "text-decoration") && !matchval(value, "none")) {
-				warning(WARN_STYLE, "Invalid value for text-decoration: %s (only reverse, none and inherit are supported).", value);
+			if(!strcmp(key, "text-decoration") && strcmp(param, "none")) {
+				swarn("Invalid value for text-decoration: %s (only reverse, none and inherit are supported).", value);
 			}
 		}
 	} else if(!strcmp(key, "color")) {
@@ -614,14 +587,13 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 				// -iftf-sys-<sys>-color, which is exempt.
 				if(!prefixed && sty_target->bodydef &&
 					ci == sty_target->bodydef[BODY_BG]) {
-					warning(WARN_STYLE,
-						"color %s matches the default background color on %s; "
+					swarn(						"color %s matches the default background color on %s; "
 						"text with this class will be invisible unless (body style $Class) is used.",
 						value, sty_target->name);
 				}
 			}
 		} else {
-			warning(WARN_STYLE, "color is not supported on %s and was ignored.", sty_target->name);
+			swarn("color is not supported on %s and was ignored.", sty_target->name);
 		}
 	} else if(!strcmp(key, "background-color")) {
 		matched = 1;
@@ -631,20 +603,21 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 			// it colors the element itself, not the screen, so the two
 			// cannot share a declaration.)
 			if(sty_target->bodydef) {
-				warning(WARN_STYLE,
-					"To set the screen background on %s, use -iftf-sys-%s-background-color.",
+				swarn(					"To set the screen background on %s, use -iftf-sys-%s-background-color.",
 					sty_target->name, sty_target->name);
 			}
 		}
 	} else if(!strcmp(key, "display")) {
+		char param[32];
 		matched = 1;
-		if(matchval(value, "none")) {
-			warning(WARN_STYLE, "display: none is not supported; the element will still be shown.");
+		if(1 == sscanf(value, "%31s", param) && !strcmp(param, "none")) {
+			swarn("display: none is not supported; the element will still be shown.");
 		}
 	} else if(!strcmp(key, "visibility")) {
+		char param[32];
 		matched = 1;
-		if(matchval(value, "hidden")) {
-			warning(WARN_STYLE, "visibility: hidden is not supported; the element will still be shown.");
+		if(1 == sscanf(value, "%31s", param) && !strcmp(param, "hidden")) {
+			swarn("visibility: hidden is not supported; the element will still be shown.");
 		}
 	}
 
@@ -653,7 +626,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	// specifically, so silence would hide a real gap -- the -iftf- set is
 	// young and grows.
 	if(prefixed && !matched) {
-		warning(WARN_STYLE, "-iftf-sys-%s-%s is not supported yet.", sty_target->name, key);
+		swarn("-iftf-sys-%s-%s is not supported yet.", sty_target->name, key);
 	}
 	// Anything else is ignored, as an interpreter must per the spec. That
 	// includes background-color, border and border-color: a div's tint and
@@ -732,8 +705,7 @@ static styclass *parse_look(int *nclassp) {
 
 	n = get16(look);
 	if(n > 255) {
-		warning(WARN_STYLE,
-			"Story has %d style classes, more than a USTY table can index "
+		swarn(			"Story has %d style classes, more than a USTY table can index "
 			"(limit 255); the interpreter will parse the style sheet at "
 			"startup instead.",
 			n);
@@ -752,17 +724,37 @@ static styclass *parse_look(int *nclassp) {
 	}
 
 	for(i = 0; i < n; i++) {
-		uint32_t ptr, end;
+		uint32_t ptr, end, p;
+		int hasiftf = 0;
+		char pfx[32];
+		size_t plen;
 
 		if((uint32_t)(2 + 2 * i + 2) > looksize) break;
 		ptr = get16(look + 2 + 2 * i);
 		if(ptr >= looksize) continue;
 		end = looksize;
+
+		// Does this class carry declarations addressed to this machine?
+		// If so, the generic ones are only a fallback that the prefixed
+		// pass replaces wholesale -- parse pass 0 with warnings off, so
+		// the author is not scolded twice for the same styling.
+		snprintf(pfx, sizeof(pfx), "-iftf-sys-%s-", sty_target->name);
+		plen = strlen(pfx);
+		p = ptr;
+		while(p < end && look[p]) {
+			uint32_t linelen = 0;
+			while(p + linelen < end && look[p + linelen]) linelen++;
+			if(linelen > plen && !strncasecmp((const char *) look + p, pfx, plen))
+				hasiftf = 1;
+			p += linelen + 1;
+		}
+
 		// Two passes over the same block: unprefixed declarations first,
 		// then the -iftf-sys- ones, so that a prefixed declaration overrides
 		// its unprefixed counterpart no matter which comes last in the CSS.
 		for(pass = 0; pass < 2; pass++) {
-			uint32_t p = ptr;
+			sty_quiet = hasiftf && pass == 0;
+			p = ptr;
 			while(p < end && look[p]) {
 				uint32_t linelen = 0;
 				while(p + linelen < end && look[p + linelen]) linelen++;
@@ -770,6 +762,7 @@ static styclass *parse_look(int *nclassp) {
 				p += linelen + 1;
 			}
 		}
+		sty_quiet = 0;
 	}
 	*nclassp = n;
 	return cls;
@@ -831,15 +824,13 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 	// See make_flat(): these two are parsed but have nowhere to go in an
 	// eight-byte record. Say so once per story rather than once per class.
 	if(npadleft) {
-		warning(WARN_STYLE,
-			"%d style class%s set a left margin or padding, which a USTY "
+		swarn(			"%d style class%s set a left margin or padding, which a USTY "
 			"record has no room for; it was ignored, as the interpreter's "
 			"own style sheet parser ignores it.",
 			npadleft, (npadleft == 1)? "" : "es");
 	}
 	if(nauto) {
-		warning(WARN_STYLE,
-			"%d style class%s set \"margin: auto\", which a USTY record "
+		swarn(			"%d style class%s set \"margin: auto\", which a USTY record "
 			"cannot encode; the div will not be centered.",
 			nauto, (nauto == 1)? "" : "es");
 	}
