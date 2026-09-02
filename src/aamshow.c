@@ -1241,6 +1241,7 @@ int main(int argc, char **argv) {
 		exit(1);
 	}
 
+	int crc_valid = 1;
 	actual_crc = 0xffffffff;
 	if(!savefile) {
 		// A story bundled for a 6502 target has had LOOK replaced by the
@@ -1248,6 +1249,7 @@ int main(int argc, char **argv) {
 		// CRC will not match HEAD either way once chunks have been rewritten.
 		if(findchunk("USTY")) {
 			crc_chunk("USTY"); // crc will fail anyway
+			crc_valid = 0;
 		} else {
 			crc_chunk("LOOK");
 		}
@@ -1259,7 +1261,10 @@ int main(int argc, char **argv) {
 		crc_chunk("WRIT");
 		actual_crc ^= 0xffffffff;
 
-		if(actual_crc != get32(chunk[0].data + 12)) {
+		if(!crc_valid) {
+			printf("Warning: This file was rewritten with a USTY chunk and CRC (%08x) was not recomputed.\n",
+				get32(chunk[0].data + 12));
+		} else if(actual_crc != get32(chunk[0].data + 12)) {
 			printf("Warning: CRC declared in header (%08x) does not match actual CRC (%08x).\n",
 				get32(chunk[0].data + 12),
 				actual_crc);
