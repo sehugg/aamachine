@@ -126,7 +126,7 @@ void check_font_has_glyphs(uint8_t *lang, uint32_t size) { // Expects the LANG c
 			(lang[exttable+5*i+4])
 		);
 		if(!does_font_have_glyph(unichar)) {
-			fprintf(stderr, "Warning: Extended character %d (%s, U+%04x) has no font entry. It will display as '�'.\n", 0x80|i, unicode_to_utf8(unichar), unichar);
+			warning(WARN_CHARSET, "Extended character %d (%s, U+%04x) has no font entry. It will display as '�'.", 0x80|i, unicode_to_utf8(unichar), unichar);
 		}
 	}
 }
