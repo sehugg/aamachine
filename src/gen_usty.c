@@ -15,7 +15,7 @@
 //
 // The parser mirrors both the dialog compiler's effective CSS subset
 // (~/if/dialog/src/frontend.c:2899-3000) and the 6502 engine's parser
-// (initengine4 in engine.s): case-insensitive keys, unknown properties
+// (initengine4 in engine.s): case-sensitive keys, unknown properties
 // ignored, width/height accept % (relative) and em/ch/en (absolute), margins
 // absolute only, fractional units truncated.
 // ============================================================================
@@ -605,7 +605,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 			// it colors the element itself, not the screen, so the two
 			// cannot share a declaration.)
 			if(sty_target->bodydef) {
-				swarn(					"To set the screen background on %s, use -iftf-sys-%s-background-color.",
+				swarn("The background-color property is web-only. To set the screen background on %s, use -iftf-sys-%s-background-color.",
 					sty_target->name, sty_target->name);
 			}
 		}
@@ -707,7 +707,7 @@ static styclass *parse_look(int *nclassp) {
 
 	n = get16(look);
 	if(n > 255) {
-		swarn(			"Story has %d style classes, more than a USTY table can index "
+		swarn("Story has %d style classes, more than a USTY table can index "
 			"(limit 255); the interpreter will parse the style sheet at "
 			"startup instead.",
 			n);
@@ -797,7 +797,7 @@ static int count_body(styclass *cls, int nclass) {
 	}
 	if(!sty_target->xstysize) return 0;
 	if(n * sty_target->xstysize > USTY_MAX_XSTYBYTES) {
-		swarn(			"%d style classes carry -iftf-sys-%s- body colors, more than "
+		swarn("%d style classes carry -iftf-sys-%s- body colors, more than "
 			"the %d bytes a USTY body array can reach (limit %d classes at "
 			"%d bytes each); they were dropped, and SET_BODY will paint the "
 			"interpreter's built-in colors.",
@@ -862,13 +862,13 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 	// See make_flat(): these two are parsed but have nowhere to go in an
 	// eight-byte record. Say so once per story rather than once per class.
 	if(npadleft) {
-		swarn(			"%d style class%s set a left margin or padding, which a USTY "
+		swarn("%d style class%s set a left margin or padding, which a USTY "
 			"record has no room for; it was ignored, as the interpreter's "
 			"own style sheet parser ignores it.",
 			npadleft, (npadleft == 1)? "" : "es");
 	}
 	if(nauto) {
-		swarn(			"%d style class%s set \"margin: auto\", which a USTY record "
+		swarn("%d style class%s set \"margin: auto\", which a USTY record "
 			"cannot encode; the div will not be centered.",
 			nauto, (nauto == 1)? "" : "es");
 	}

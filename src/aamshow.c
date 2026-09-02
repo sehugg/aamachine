@@ -193,7 +193,7 @@ void decode_look(struct chunk *ch) {
 // stated in the header only so the engine need not compute it. The xsty
 // record shape follows from the tag's target nibble.
 //
-// Keep in step with the record layouts in gen_usty.c and STYLE_SPEC.md.
+// Keep in step with the record layouts in gen_usty.c.
 
 static void put_style_bits(uint8_t bits) {
 	int first = 1;

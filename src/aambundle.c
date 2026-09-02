@@ -425,8 +425,8 @@ void usage(char *prgname, int all) {
 		fprintf(stderr, "--no-warn-charset       Never warn about codepoints the target cannot render.\n");
 		fprintf(stderr, "--warn-input            Always warn about words the target cannot type.\n");
 		fprintf(stderr, "--no-warn-input         Never warn about words the target cannot type.\n");
-		fprintf(stderr, "--warn-style            Always warn about styles the target cannot precompute.\n");
-		fprintf(stderr, "--no-warn-style         Never warn about styles the target cannot precompute.\n");
+		fprintf(stderr, "--warn-style            Always warn about styles the target cannot support.\n");
+		fprintf(stderr, "--no-warn-style         Never warn about styles the target cannot support.\n");
 		fprintf(stderr, "--warnings-as-errors    Exit with a failure status if anything warned.\n");
 	}
 	fprintf(stderr, "\n");
@@ -436,7 +436,7 @@ void usage(char *prgname, int all) {
 	fprintf(stderr, "apple2            Directory with apple2 disk images.\n");
 	fprintf(stderr, "web:story         Just story.js for the web interpreter.\n");
 	if(all) {
-		fprintf(stderr, "aambox            Just the rewritten .aastory, for the aambox test platform.\n");
+		fprintf(stderr, "aambox            Rewrite to .ustory format for the aambox test platform.\n");
 	}
 	exit(1);
 }
