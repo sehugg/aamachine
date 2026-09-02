@@ -69,15 +69,6 @@ typedef enum {
 void warning(warn_id_t id, const char *fmt, ...);
 void vwarning(warn_id_t id, const char *fmt, va_list ap);
 
-/* Warn about codepoints the story declares that the target cannot render */
-void check_charset(const char* target_name, int aaglyph_flags);
-
-#define AAGLYPH_BITMAP          1       /* has a font bitmap (c64) */
-#define AAGLYPH_TRANSLIT        2       /* has a transliteration (apple2) */
-
-/* Warn about dictionary words the player cannot type on the target. */
-void check_keyboard(const char *target_name, const char *untypeable);
-
 /* 6502 rewrite chunks helper */
 
 chunk_action_t rewrite_6502(

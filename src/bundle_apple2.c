@@ -870,8 +870,6 @@ void bundle_apple2(char *dirname) {
 	int mode;
 
 	visit_chunks(storyname, sizeof(storyname), apple2_chunk_visitor);
-	check_charset("apple2", AAGLYPH_TRANSLIT);
-	check_keyboard("apple2", AAKBD_APPLE2);
 	gen_usty_set_target("apple2");
 	rewrite_chunks(rewrite_6502_sty, 1);
 	gen_usty_check();
