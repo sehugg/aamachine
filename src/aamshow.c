@@ -176,23 +176,24 @@ void decode_look(struct chunk *ch) {
 }
 
 // USTY: bundler-generated style table for the 6502 engines.
-// Format defined in STYLE_SPEC.md.
+// (USTY_VERSION_EXT).
 //
-// 0   tag                 ; high nibble target, low nibble format version
-// 1   nclass
-// 2   ngeo                ; incl. the reserved default record in slot 0
-// 3   nsty                ; incl. the reserved default record in slot 0
-// 4   nxsty
-// 5   geoidx[nclass]      ; class -> byte offset into geo (slot * 8)
-//     styidx[nclass]      ; class -> byte offset into sty (slot * 4)
-//     sty[nsty * 4]
-//     geo[ngeo * 8]
-//     xsty[nxsty * xstysize]     ; 7 bytes
+// 0     tag                 ; high nibble target, low nibble format version
+// 1     nclass
+// 2     nxsty
+// 3     xstysize            ; bytes per xsty record; 0 = target has none
+// 4-5   totalwords          ; b-e, words of heap the two arrays need
+// 6-7   xstyoff             ; b-e, body array offset from the record base
+//       class records[nclass * USTY_FLAT_RECSIZE]
+//       xsty[nxsty * xstysize]
+//       pad                 ; 0 or 1 bytes, to totalwords * 2
 //
-// Every array offset follows from the counts, so the header carries none.
-// The xsty record shape follows from the tag's target nibble.
+// The class records start at the fixed USTY_EXT_HDRSIZE offset and are
+// USTY_FLAT_RECSIZE bytes each, so xstyoff follows from the counts; it is
+// stated in the header only so the engine need not compute it. The xsty
+// record shape follows from the tag's target nibble.
 //
-// Keep in step with the record layouts in gen_usty.c.
+// Keep in step with the record layouts in gen_usty.c and STYLE_SPEC.md.
 
 static void put_style_bits(uint8_t bits) {
 	int first = 1;

@@ -10,11 +10,8 @@
 // USTY chunk generation: precomputed style table for the 6502 engines.
 //
 // Parses the LOOK chunk (CSS declarations) once, in C, and emits the compact
-// binary table defined in STYLE_SPEC.md. USTY replaces LOOK on the 6502
-// targets: the c64 and apple2 interpreters have no style sheet parser left
-// (NO_CSS_PARSER), so the table is a requirement rather than an
-// optimization, and gen_usty_check() aborts the bundle if one cannot be
-// built.
+// binary table defined in aamshow.c. USTY replaces LOOK on the 6502
+// targets: the c64 and apple2 interpreters have no style sheet parser.
 //
 // The parser mirrors both the dialog compiler's effective CSS subset
 // (~/if/dialog/src/frontend.c:2899-3000) and the 6502 engine's parser
