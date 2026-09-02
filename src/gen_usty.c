@@ -116,13 +116,6 @@ struct sty_target {
 	                        // the *packing* below is c64-shaped: a target with
 	                        // a different palette needs its own packer, not
 	                        // just a different size here.
-	// Whether the target's interpreter still carries a style sheet parser.
-	// The c64 and apple2 builds define NO_CSS_PARSER and drop it (802 bytes
-	// of engine.s), so for them a USTY table is not an optimization but a
-	// requirement: a disk shipped without one would boot to a story with no
-	// style table at all. aambox keeps both paths, because the test suite
-	// hands it raw .aastory files that have never been through here.
-	int usty_required;
 
 	// Screen size in character cells, for range-checking absolute lengths.
 	// mincols/maxcols bracket the machine's real text widths: the c64 is a
@@ -147,15 +140,15 @@ struct sty_target {
 //   aambox  io_mstyle is a bare rts (aambox_frontend.s:221). Nothing.
 
 static const struct sty_target sty_aambox = {
-	"aambox", STY_TAG_AAMBOX, 0, 0, 0, 0, 0, 80, 80, 20
+	"aambox", STY_TAG_AAMBOX, 0, 0, 0, 0, 80, 80, 20
 };
 static const struct sty_target sty_c64 = {
 	"c64", STY_TAG_C64, 1,
 	AASTYLE_REVERSE | AASTYLE_BOLD | AASTYLE_ITALIC, c64_bodydef, XSTY_SIZE_C64,
-	1, 40, 40, 20
+	40, 40, 20
 };
 static const struct sty_target sty_apple2 = {
-	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0, 0, 1, 40, 80, 20
+	"apple2", STY_TAG_APPLE2, 0, AASTYLE_REVERSE, 0, 0, 40, 80, 20
 };
 
 static const struct sty_target *sty_target;
@@ -899,7 +892,7 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 // rewrite_6502_sty() to key off -- land in the same place.
 
 void gen_usty_check(void) {
-	if(sty_target && sty_target->usty_required && !sty_emitted) {
+	if(sty_target && !sty_emitted) {
 		warning(WARN_ERROR,
 			"Could not build the %s style table.",
 			sty_target->name);
