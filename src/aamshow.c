@@ -308,48 +308,6 @@ static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
 	printf("\n");
 }
 
-// Revision 11: a flat array of one record per class, in the field order
-// engine.s indexes with stybase + class * 8. No offsets in the header: the
-// records sit at a fixed offset and the body records follow them, so both
-// bases are computed the same way here as in the engine.
-
-static void decode_usty_flat(uint8_t *d, uint32_t size, uint8_t tag) {
-	uint8_t nclass, nxsty, xstysize;
-	uint32_t recoffs, xstyoffs;
-
-	if(size < USTY_FLAT_HDRSIZE) {
-		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
-		return;
-	}
-
-	nclass = d[1];
-	nxsty = d[2];
-	xstysize = d[3];
-
-	recoffs = USTY_FLAT_HDRSIZE;
-	xstyoffs = recoffs + nclass * USTY_FLAT_RECSIZE;
-
-	printf("nclass: %d  nxsty: %d", nclass, nxsty);
-	if(nxsty) {
-		printf(" (%d bytes each)", xstysize);
-	} else if(!xstysize) {
-		printf(" (target has no body records)");
-	}
-	printf("\n");
-	printf("Offsets: rec %u  xsty %u\n", recoffs, xstyoffs);
-
-	if(nxsty && !xstysize) {
-		printf("Warning: %d body records declared with a record size of 0.\n", nxsty);
-		return;
-	}
-	if(xstyoffs + nxsty * xstysize > size) {
-		printf("Warning: table extends past the end of the chunk (%u bytes).\n", size);
-		return;
-	}
-
-	decode_usty_records(d, tag, recoffs, nclass, xstyoffs, nxsty, xstysize);
-}
-
 // Revision 12: revision 11's arrays under a header that also states the size
 // of the resident block and where the body array starts inside it. Both are
 // derivable from the counts, so they are cross-checked here -- a stale offset
@@ -447,15 +405,12 @@ void decode_usty(struct chunk *ch) {
 	// rather than misparsing one as the other -- this is the mismatch the
 	// tag byte exists to catch.
 	switch(tag & 0x0f) {
-	case USTY_VERSION_FLAT:
-		decode_usty_flat(d, size, tag);
-		break;
 	case USTY_VERSION_EXT:
 		decode_usty_ext(d, size, tag);
 		break;
 	default:
-		printf("Cannot decode USTY format version %d; this aamshow knows %d and %d.\n",
-			tag & 0x0f, USTY_VERSION_FLAT, USTY_VERSION_EXT);
+		printf("Cannot decode USTY format version %d; this aamshow knows %d.\n",
+			tag & 0x0f, USTY_VERSION_EXT);
 		break;
 	}
 }

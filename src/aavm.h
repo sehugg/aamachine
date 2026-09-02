@@ -182,7 +182,6 @@
 
 // The USTY version number is internal, mainly to prevent devs from confusing
 // themselves, so it should be incremented often and can wrap (0..15)
-#define USTY_VERSION_FLAT	11
 #define USTY_VERSION_EXT	12
 #define USTY_VERSION		USTY_VERSION_EXT
 
