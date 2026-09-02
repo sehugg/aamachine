@@ -195,29 +195,32 @@ static const struct {
 	{"white", 1},
 	{"red", 2},
 	{"cyan", 3},
-	{"aqua", 3},
-	{"magenta", 4},
-	{"fuchsia", 4},
 	{"purple", 4},
 	{"green", 5},
-	{"lime", 5},
 	{"blue", 6},
-	{"navy", 6},
 	{"yellow", 7},
 	{"orange", 8},
 	{"brown", 9},
+	{"pink", 10},
+	{"darkgrey", 11},
+	{"mediumgrey", 12},
+	{"lightgreen", 13},
+	{"lightblue", 14},
+	{"lightgrey", 15},
+	// synonyms
 	{"maroon", 2},
-	{"silver", 15},
+	{"aqua", 3},
+	{"teal", 3},
+	{"magenta", 4},
+	{"fuchsia", 4},
+	{"lime", 5},
+	{"navy", 6},
+	{"lightred", 10},
 	{"gray", 11},
 	{"grey", 11},
 	{"darkgray", 11},
-	{"darkgrey", 11},
 	{"lightgray", 15},
-	{"lightgrey", 15},
-	{"teal", 3},
-	{"lightred", 10},
-	{"lightgreen", 13},
-	{"lightblue", 14}
+	{"silver", 15},
 };
 
 // Map an rgb triplet to the nearest VIC-II color, using a perceptual
@@ -250,9 +253,10 @@ static int rgb_to_c64(int r, int g, int b) {
 			best = i;
 		}
 	}
-	if(bestdist > (2+3+4)*48*48) {
-		swarn("The color #%02x%02x%02x is not accurately represented on %s.",
-			r, g, b, sty_target->name);
+	if(bestdist > (2+3+4)*64*64) {
+		swarn("The color #%02x%02x%02x is not accurately represented on %s, the closest is %s (index %d, #%02x%02x%02x).",
+			r, g, b, sty_target->name, css2vic[best].name, best,
+			c64_rgb[best][0], c64_rgb[best][1], c64_rgb[best][2]);
 	}
 	return best;
 }
