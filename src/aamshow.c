@@ -181,17 +181,19 @@ void decode_look(struct chunk *ch) {
 // 0     tag                 ; high nibble target, low nibble format version
 // 1     nclass
 // 2     nxsty
-// 3     xstysize            ; bytes per xsty record; 0 = target has none
+// 3     reserved
 // 4-5   totalwords          ; b-e, words of heap the two arrays need
 // 6-7   xstyoff             ; b-e, body array offset from the record base
 //       class records[nclass * USTY_RECSIZE]
-//       xsty[nxsty * xstysize]
+//       xsty[]              ; (index, datalen, data[datalen]) records,
+//                           ; ended by $ff in an index byte
 //       pad                 ; 0 or 1 bytes, to totalwords * 2
 //
 // The class records start at the fixed USTY_HDRSIZE offset and are
 // USTY_RECSIZE bytes each, so xstyoff follows from the counts; it is
 // stated in the header only so the engine need not compute it. The xsty
-// record shape follows from the tag's target nibble.
+// record payload shape follows from the tag's target nibble; datalen is
+// what bounds the walk, so no stride is needed to decode the array.
 //
 // Keep in step with the record layouts in gen_usty.c.
 
@@ -208,60 +210,28 @@ static void put_style_bits(uint8_t bits) {
 static const char *float_names[] = {"none", "left", "right", "center"};
 static const char *align_names[] = {"none", "left", "right", "center"};
 
-// The body-record array is byte-identical in both revisions, so both dumps
-// end here.
-
-static void decode_xsty(uint8_t *d, uint8_t tag, uint32_t xstyoffs,
-	uint8_t nxsty, uint8_t xstysize)
+static void decode_xsty(uint8_t *d, uint8_t tag, int nrec,
+	const uint32_t *recoffs)
 {
-	// Body records: background, border, then eight palette entries
-	// indexed by the low three style bits, then the cursor color. All
-	// eleven are always present; the bundler resolves undeclared ones
-	// to the frontend's defaults.
-	static const char *palnames[8] = {
-		"-", "R", "B", "BR", "I", "IR", "BI", "BIR"
-	};
 	int i;
 
-	// Only byte 0 (the class index SET_BODY scans for) is common to
-	// every target. The rest of the record is the frontend's palette,
-	// so the field-by-field dump below is c64-shaped; another 6502
-	// platform with a different palette gets a hex dump rather than a
-	// confident misreading of its bytes. Size 6 is the pre-cursor
-	// record (kept readable); 7 adds the cursor nibble in byte 6.
-	int c64shape = (tag & 0xf0) == 0x10 && (xstysize == 6 || xstysize == 7);
-
-	printf("\nxsty (%d body records, %d bytes each):\n", nxsty, xstysize);
-	if(c64shape) {
-		printf("  palette index = reverse | bold << 1 | italic << 2"
-			"  (B=bold I=italic R=reverse)\n");
-	}
-	for(i = 0; i < nxsty; i++) {
-		uint8_t *x = d + xstyoffs + i * xstysize;
+	printf("\nxsty (%d body records):\n", nrec);
+	for(i = 0; i < nrec; i++) {
+		uint8_t *x = d + recoffs[i];
+		uint8_t idx = x[0], len = x[1];
 		int j;
 
-		if(!c64shape) {
-			printf("  %02x: class=%-3d payload:", i, x[0]);
-			for(j = 1; j < xstysize; j++) printf(" %02x", x[j]);
-			printf("   (unknown body-record shape)\n");
-			continue;
-		}
-		printf("  %02x: class=%-3d background=%x border=%x\n      palette:",
-			i, x[0], x[1] & 15, x[1] >> 4);
-		for(j = 0; j < 8; j++) {
-			printf(" [%s]=%x", palnames[j],
-				(j & 1)? x[2 + j / 2] >> 4 : x[2 + j / 2] & 15);
-		}
+		printf("  %02x: class=%-3d datalen=%d payload:", i, idx, len);
+		for(j = 0; j < len; j++) printf(" %02x", x[2 + j]);
 		printf("\n");
-		printf("      cursor=%x (reserved=%x)\n", x[6] & 15, x[6] >> 4);
 	}
 }
 
-// The record array, shared by revisions 11 and 12 -- revision 12 changed the
-// header and nothing below it.
+// The record array. The body array is dumped from the offsets the walk
+// collected.
 
 static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
-	uint8_t nclass, uint32_t xstyoffs, uint8_t nxsty, uint8_t xstysize)
+	uint8_t nclass, int nrec, const uint32_t *xrecoffs)
 {
 	int i;
 
@@ -305,20 +275,24 @@ static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
 		printf("\n");
 	}
 
-	if(nxsty) decode_xsty(d, tag, xstyoffs, nxsty, xstysize);
+	if(nrec) decode_xsty(d, tag, nrec, xrecoffs);
 	printf("\n");
 }
 
-// Revision 12: revision 11's arrays under a header that also states the size
-// of the resident block and where the body array starts inside it. Both are
-// derivable from the counts, so they are cross-checked here -- a stale offset
-// disagreeing with a count is the one hazard stating them reintroduces, and
-// this is where it gets caught.
+// Revision 13: the class records under a header that also states the size
+// of the resident block and where the body array starts inside it, and a
+// body array of self-describing records ended by $ff. The stated figures
+// are derivable, so they are cross-checked here -- a stale offset
+// disagreeing with a count is the one hazard stating them reintroduces,
+// and this is where it gets caught.
 
 static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
-	uint8_t nclass, nxsty, xstysize;
+	uint8_t nclass, nxsty;
 	uint32_t recoffs, xstyoffs, totalwords, xstyrel;
 	uint32_t wantxsty, wantwords, blockbytes;
+	uint32_t xrecoffs[256];
+	uint32_t walked;
+	int nrec;
 
 	if(size < USTY_HDRSIZE) {
 		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
@@ -327,46 +301,72 @@ static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 
 	nclass = d[1];
 	nxsty = d[2];
-	xstysize = d[3];
 	totalwords = (d[4] << 8) | d[5];
 	xstyrel = (d[6] << 8) | d[7];
 
 	recoffs = USTY_HDRSIZE;
 	xstyoffs = recoffs + xstyrel;
 
-	printf("nclass: %d  nxsty: %d", nclass, nxsty);
-	if(nxsty) {
-		printf(" (%d bytes each)", xstysize);
-	} else if(!xstysize) {
-		printf(" (target has no body records)");
-	}
-	printf("\n");
+	printf("nclass: %d  nxsty: %d\n", nclass, nxsty);
 	printf("Offsets: rec %u  xsty %u  (%u words resident)\n",
 		recoffs, xstyoffs, totalwords);
 
-	if(nxsty && !xstysize) {
-		printf("Warning: %d body records declared with a record size of 0.\n", nxsty);
-		return;
-	}
-	if(xstysize > USTY_MAX_XSTYSIZE) {
-		printf("Warning: body record of %d bytes does not fit databuf (max %d).\n",
-			xstysize, USTY_MAX_XSTYSIZE);
-	}
-	if(nxsty * xstysize > USTY_MAX_XSTYBYTES) {
-		printf("Warning: body array of %d bytes is past the scan's one-page reach (max %d).\n",
-			nxsty * xstysize, USTY_MAX_XSTYBYTES);
-	}
-
 	// The two stated figures against the two counts.
 	wantxsty = nclass * USTY_RECSIZE;
-	blockbytes = wantxsty + nxsty * xstysize;
-	wantwords = (blockbytes + 1) / 2;
 	if(xstyrel != wantxsty) {
 		printf("Warning: header says the body array is at +%u, but %d classes "
 			"of %d bytes put it at +%u.\n",
 			xstyrel, nclass, USTY_RECSIZE, wantxsty);
 		return;
 	}
+
+	// Walk the body array the way the engine's scan does: (index, datalen,
+	// data), ended by $ff in an index byte. This bounds every read and
+	// catches a truncated or padded-over array at inspection time.
+	walked = 0;
+	nrec = 0;
+	while(1) {
+		uint8_t idx, len;
+
+		if(xstyoffs + walked + 1 > size) {
+			printf("Warning: body array runs past the end of the chunk with no $ff terminator.\n");
+			return;
+		}
+		idx = d[xstyoffs + walked];
+		if(idx == USTY_XSTY_END) {
+			walked++;               // the terminator belongs to the array
+			break;
+		}
+		if(xstyoffs + walked + 2 > size) {
+			printf("Warning: body record for class %d runs past the end of the chunk.\n", idx);
+			return;
+		}
+		len = d[xstyoffs + walked + 1];
+		if(len > USTY_MAX_XSTYSIZE) {
+			printf("Warning: body record for class %d has datalen %d, past the databuf cap (max %d).\n",
+				idx, len, USTY_MAX_XSTYSIZE);
+			return;
+		}
+		if(xstyoffs + walked + 2 + len > size) {
+			printf("Warning: body record for class %d runs past the end of the chunk.\n", idx);
+			return;
+		}
+		if(nrec < 256) xrecoffs[nrec] = xstyoffs + walked;
+		nrec++;
+		walked += 2 + len;
+	}
+	if(walked > USTY_MAX_XSTYBYTES) {
+		printf("Warning: body array of %u bytes is past the scan's one-page reach (max %d).\n",
+			walked, USTY_MAX_XSTYBYTES);
+	}
+	if(nrec != nxsty) {
+		printf("Warning: header says %d body records, but the array holds %d.\n",
+			nxsty, nrec);
+		return;
+	}
+
+	blockbytes = wantxsty + walked;
+	wantwords = (blockbytes + 1) / 2;
 	if(totalwords != wantwords) {
 		printf("Warning: header says %u words resident, but the counts need %u.\n",
 			totalwords, wantwords);
@@ -378,7 +378,7 @@ static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 		return;
 	}
 
-	decode_usty_records(d, tag, recoffs, nclass, xstyoffs, nxsty, xstysize);
+	decode_usty_records(d, tag, recoffs, nclass, nrec, xrecoffs);
 }
 
 void decode_usty(struct chunk *ch) {
@@ -402,9 +402,6 @@ void decode_usty(struct chunk *ch) {
 	}
 	printf(", format version %d)\n", tag & 0x0f);
 
-	// The two revisions have different headers, so dispatch on the tag
-	// rather than misparsing one as the other -- this is the mismatch the
-	// tag byte exists to catch.
 	switch(tag & 0x0f) {
 	case USTY_VERSION:
 		decode_usty_ext(d, size, tag);

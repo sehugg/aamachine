@@ -179,12 +179,13 @@
 // USTY chunk (precomputed style table for the 6502 targets)
 // The USTY version number is internal, mainly to prevent devs from confusing
 // themselves, so it should be incremented often and can wrap (0..15)
-#define USTY_VERSION		12
+#define USTY_VERSION		13
 
 #define USTY_HDRSIZE		8	// USTY header size
 #define USTY_RECSIZE		8	// USTY record size
-#define USTY_MAX_XSTYSIZE	8	// maximum size of a xsty record
-#define USTY_MAX_XSTYBYTES	255	// maximum size of xsty array
+#define USTY_MAX_XSTYSIZE	8	// maximum datalen of a xsty record
+#define USTY_MAX_XSTYBYTES	255	// maximum size of the xsty array
+#define USTY_XSTY_END		0xff	// xsty index byte that ends the array
 
 #define USTY_F_WIDTH		0
 #define USTY_F_HEIGHT		1

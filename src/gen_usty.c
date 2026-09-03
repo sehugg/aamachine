@@ -31,21 +31,23 @@
 
 #define NOCOLOR   0x80    // "$80 = not set" sentinel for the sty fg field
 
-// Bytes per xsty record for the c64. This goes in the chunk header.
-// Must be <= USTY_MAX_XSTYSIZE
+// Bytes of body payload per c64 xsty record: the record's datalen, not
+// counting the (index, datalen) prefix. Must be <= USTY_MAX_XSTYSIZE
 #define XSTY_SIZE_C64 7
 
 // xsty payload for C64.
 enum {
 	BODY_BG = 0,
 	BODY_BORDER = 1,
-	BODY_PAL = 2,		// BODY_PAL + (style & 7)
-	BODY_CURSOR = 10,	// sprite color register $d027
-	BODY_N = 11
+	BODY_CURSOR = 2,
+	BODY_STATUS = 3,
+	BODY_PAL = 4,		// BODY_PAL + (style & 7)
+	BODY_N = 12
 };
 
 static const char *bodyprops[BODY_N] = {
 	"background-color", "border-color",
+	"cursor-color", "status-color",
 	"normal-color",                 // 0  -
 	"reverse-color",                // 1  reverse
 	"bold-color",                   // 2  bold
@@ -54,18 +56,17 @@ static const char *bodyprops[BODY_N] = {
 	"italic-reverse-color",         // 5  italic reverse
 	"bold-italic-color",            // 6  bold italic
 	"bold-italic-reverse-color",    // 7  bold italic reverse
-	"cursor-color"                  // $d027, not a palette entry
 };
 
 // The c64 frontend's compiled-in defaults: a light grey screen and border
 // Keep this in sync with c64 frontend.
 static const uint8_t c64_bodydef[BODY_N] = {
 	0x0f, 0x0f,             // background, border
+	0x08, 0x0b,             // cursor, status
 	0x00, 0x01,             // -, reverse
 	0x0b, 0x07,             // bold, bold reverse
 	0x06, 0x02,             // italic, italic reverse
 	0x0e, 0x0a,             // bold italic, bold italic reverse
-	0x08                    // cursor (orange, c64_frontend.s $d027 init)
 };
 
 struct sty_target {
@@ -74,7 +75,8 @@ struct sty_target {
 	int have_vic_color;     // per-character fg color (c64)
 	uint8_t stymask;        // AASTYLE_* bits the frontend can actually act on
 	const uint8_t *bodydef; // BODY_N defaults, or null if the target has no records
-	uint8_t xstysize;       // bytes per body record; 0 if bodydef is null.
+	uint8_t bodylen;        // body payload bytes per record (the record's datalen);
+	                        // 0 if bodydef is null
 
 	int mincols, maxcols;	// 40 for c64, 40-80 for apple2, 80 for aambox
 	int maxrows;		// 20 for all
@@ -590,18 +592,19 @@ static void make_flat(uint8_t *r, const styclass *c) {
 }
 
 // Body records are keyed on the raw class index because SET_BODY takes a
-// class operand.
+// class operand; the caller writes the (index, datalen) prefix and this
+// fills the payload that follows it.
 
 static void make_xsty(uint8_t *x, int classidx, const styclass *c) {
 	int j;
 
-	x[0] = classidx;
-	x[1] = c->body[BODY_BG] | (c->body[BODY_BORDER] << 4);
+	x[0] = c->body[BODY_BG] | (c->body[BODY_BORDER] << 4);
+	x[1] = c->body[BODY_CURSOR] | (c->body[BODY_STATUS] << 4);
 	for(j = 0; j < 4; j++) {
 		x[2 + j] = c->body[BODY_PAL + j * 2]
 			| (c->body[BODY_PAL + j * 2 + 1] << 4);
 	}
-	x[6] = c->body[BODY_CURSOR]; // high nibble reserved
+	// TODO: warn if background/text colors match
 }
 
 static uint16_t get16(const uint8_t *p) {
@@ -684,9 +687,11 @@ static styclass *parse_look(int *nclassp) {
 	return cls;
 }
 
-// Build the USTY chunk.
+// Build the USTY chunk (revision 13).
 //
-// The payload is padded to an even length after the header so that
+// The body array is a list of (index, datalen, data...) records, ended by
+// a single $ff index byte; datalen is the per-target payload size. The
+// payload is padded to an even length after the header so that
 // totalwords * 2 is exactly the number of bytes the engine reads.
 
 static uint8_t *build_usty_flat(uint32_t *sizep) {
@@ -694,7 +699,7 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 	int nclass;
 	uint8_t *out;
 	uint32_t size, recoffs, xstyoffs, blockbytes, totalwords;
-	int nxsty = 0, nover = 0, maxnsty;
+	int nxsty = 0, nover = 0, maxnsty, reclen;
 	int i;
 
 	cls = parse_look(&nclass);
@@ -702,12 +707,13 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 
 	recoffs = USTY_HDRSIZE;
 	xstyoffs = recoffs + nclass * USTY_RECSIZE;
-	maxnsty = sty_target->xstysize?
-		USTY_MAX_XSTYBYTES / sty_target->xstysize : 0;
+	reclen = 2 + sty_target->bodylen;       // index, datalen, payload
+	maxnsty = sty_target->bodylen?
+		(USTY_MAX_XSTYBYTES - 1) / reclen : 0;
 
-	// Upper bound: the full body array, which is what the engine's
-	// one-page scan can reach.
-	size = xstyoffs + USTY_MAX_XSTYBYTES;
+	// Upper bound: the full body array with its terminator, which is what
+	// the engine's one-page scan can reach.
+	size = xstyoffs + USTY_MAX_XSTYBYTES + 1;
 
 	out = calloc(1, size);
 	if(!out) {
@@ -717,7 +723,8 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 
 	out[0] = sty_target->tag | USTY_VERSION;
 	out[1] = nclass;
-	out[3] = sty_target->xstysize;  // per-target body record stride
+	// out[2] = nxsty, filled in below.
+	// out[3] stays 0: reserved (revision 12's xstysize stride byte).
 	out[6] = (xstyoffs - recoffs) >> 8;     // from the record base, which is
 	out[7] = (xstyoffs - recoffs) & 0xff;   // the pointer the engine holds
 
@@ -725,8 +732,10 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 		make_flat(out + recoffs + i * USTY_RECSIZE, &cls[i]);
 		if(cls[i].hasbody) {
 			if(nxsty < maxnsty) {
-				make_xsty(out + xstyoffs + nxsty * sty_target->xstysize,
-					i, &cls[i]);
+				uint8_t *x = out + xstyoffs + nxsty * reclen;
+				x[0] = i;
+				x[1] = sty_target->bodylen;
+				make_xsty(x + 2, i, &cls[i]);
 				nxsty++;
 			} else {
 				nover++;
@@ -734,12 +743,16 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 		}
 	}
 
+	// The array always ends in $ff, even empty: the terminator is the only
+	// thing that tells the engine's scan to stop.
+	out[xstyoffs + nxsty * reclen] = USTY_XSTY_END;
+
 	if(nover) {
 		warning(WARN_STYLE, "Too many classes have -iftf-sys-%s- colors (max is %d) so some body styles were dropped.",
 			sty_target->name, maxnsty);
 	}
 
-	blockbytes = nclass * USTY_RECSIZE + nxsty * sty_target->xstysize;
+	blockbytes = nclass * USTY_RECSIZE + nxsty * reclen + 1;
 	totalwords = (blockbytes + 1) / 2; // word = 2 bytes
 	size = recoffs + totalwords * 2; // size is in bytes
 	out[2] = nxsty;
