@@ -177,14 +177,12 @@
 #define AA_MAX_TEMP		(REG_TMP - REG_X) // 48
 
 // USTY chunk (precomputed style table for the 6502 targets)
-
 // The USTY version number is internal, mainly to prevent devs from confusing
 // themselves, so it should be incremented often and can wrap (0..15)
-#define USTY_VERSION_EXT	12
-#define USTY_VERSION		USTY_VERSION_EXT
+#define USTY_VERSION		12
 
-#define USTY_EXT_HDRSIZE	8	// USTY header size
-#define USTY_FLAT_RECSIZE	8	// USTY record size
+#define USTY_HDRSIZE		8	// USTY header size
+#define USTY_RECSIZE		8	// USTY record size
 #define USTY_MAX_XSTYSIZE	8	// maximum size of a xsty record
 #define USTY_MAX_XSTYBYTES	255	// maximum size of xsty array
 

@@ -176,7 +176,7 @@ void decode_look(struct chunk *ch) {
 }
 
 // USTY: bundler-generated style table for the 6502 engines.
-// (USTY_VERSION_EXT).
+// (USTY_VERSION).
 //
 // 0     tag                 ; high nibble target, low nibble format version
 // 1     nclass
@@ -184,12 +184,12 @@ void decode_look(struct chunk *ch) {
 // 3     xstysize            ; bytes per xsty record; 0 = target has none
 // 4-5   totalwords          ; b-e, words of heap the two arrays need
 // 6-7   xstyoff             ; b-e, body array offset from the record base
-//       class records[nclass * USTY_FLAT_RECSIZE]
+//       class records[nclass * USTY_RECSIZE]
 //       xsty[nxsty * xstysize]
 //       pad                 ; 0 or 1 bytes, to totalwords * 2
 //
-// The class records start at the fixed USTY_EXT_HDRSIZE offset and are
-// USTY_FLAT_RECSIZE bytes each, so xstyoff follows from the counts; it is
+// The class records start at the fixed USTY_HDRSIZE offset and are
+// USTY_RECSIZE bytes each, so xstyoff follows from the counts; it is
 // stated in the header only so the engine need not compute it. The xsty
 // record shape follows from the tag's target nibble.
 //
@@ -265,9 +265,9 @@ static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
 {
 	int i;
 
-	printf("\nClass records (%d bytes each):\n", USTY_FLAT_RECSIZE);
+	printf("\nClass records (%d bytes each):\n", USTY_RECSIZE);
 	for(i = 0; i < nclass; i++) {
-		uint8_t *r = d + recoffs + i * USTY_FLAT_RECSIZE;
+		uint8_t *r = d + recoffs + i * USTY_RECSIZE;
 		uint8_t fl = r[USTY_F_FLAGS];
 		int flo = (fl & USTY_FL_FLOATL)? 1 : 0;
 
@@ -320,7 +320,7 @@ static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 	uint32_t recoffs, xstyoffs, totalwords, xstyrel;
 	uint32_t wantxsty, wantwords, blockbytes;
 
-	if(size < USTY_EXT_HDRSIZE) {
+	if(size < USTY_HDRSIZE) {
 		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
 		return;
 	}
@@ -331,7 +331,7 @@ static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 	totalwords = (d[4] << 8) | d[5];
 	xstyrel = (d[6] << 8) | d[7];
 
-	recoffs = USTY_EXT_HDRSIZE;
+	recoffs = USTY_HDRSIZE;
 	xstyoffs = recoffs + xstyrel;
 
 	printf("nclass: %d  nxsty: %d", nclass, nxsty);
@@ -358,13 +358,13 @@ static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 	}
 
 	// The two stated figures against the two counts.
-	wantxsty = nclass * USTY_FLAT_RECSIZE;
+	wantxsty = nclass * USTY_RECSIZE;
 	blockbytes = wantxsty + nxsty * xstysize;
 	wantwords = (blockbytes + 1) / 2;
 	if(xstyrel != wantxsty) {
 		printf("Warning: header says the body array is at +%u, but %d classes "
 			"of %d bytes put it at +%u.\n",
-			xstyrel, nclass, USTY_FLAT_RECSIZE, wantxsty);
+			xstyrel, nclass, USTY_RECSIZE, wantxsty);
 		return;
 	}
 	if(totalwords != wantwords) {
@@ -406,12 +406,12 @@ void decode_usty(struct chunk *ch) {
 	// rather than misparsing one as the other -- this is the mismatch the
 	// tag byte exists to catch.
 	switch(tag & 0x0f) {
-	case USTY_VERSION_EXT:
+	case USTY_VERSION:
 		decode_usty_ext(d, size, tag);
 		break;
 	default:
 		printf("Cannot decode USTY format version %d; this aamshow knows %d.\n",
-			tag & 0x0f, USTY_VERSION_EXT);
+			tag & 0x0f, USTY_VERSION);
 		break;
 	}
 }

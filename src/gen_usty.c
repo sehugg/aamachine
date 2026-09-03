@@ -700,8 +700,8 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 	cls = parse_look(&nclass);
 	if(!cls) return 0;
 
-	recoffs = USTY_EXT_HDRSIZE;
-	xstyoffs = recoffs + nclass * USTY_FLAT_RECSIZE;
+	recoffs = USTY_HDRSIZE;
+	xstyoffs = recoffs + nclass * USTY_RECSIZE;
 	maxnsty = sty_target->xstysize?
 		USTY_MAX_XSTYBYTES / sty_target->xstysize : 0;
 
@@ -715,14 +715,14 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 		exit(1);
 	}
 
-	out[0] = sty_target->tag | USTY_VERSION_EXT;
+	out[0] = sty_target->tag | USTY_VERSION;
 	out[1] = nclass;
 	out[3] = sty_target->xstysize;  // per-target body record stride
 	out[6] = (xstyoffs - recoffs) >> 8;     // from the record base, which is
 	out[7] = (xstyoffs - recoffs) & 0xff;   // the pointer the engine holds
 
 	for(i = 0; i < nclass; i++) {
-		make_flat(out + recoffs + i * USTY_FLAT_RECSIZE, &cls[i]);
+		make_flat(out + recoffs + i * USTY_RECSIZE, &cls[i]);
 		if(cls[i].hasbody) {
 			if(nxsty < maxnsty) {
 				make_xsty(out + xstyoffs + nxsty * sty_target->xstysize,
@@ -739,7 +739,7 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 			sty_target->name, maxnsty);
 	}
 
-	blockbytes = nclass * USTY_FLAT_RECSIZE + nxsty * sty_target->xstysize;
+	blockbytes = nclass * USTY_RECSIZE + nxsty * sty_target->xstysize;
 	totalwords = (blockbytes + 1) / 2; // word = 2 bytes
 	size = recoffs + totalwords * 2; // size is in bytes
 	out[2] = nxsty;
