@@ -101,6 +101,9 @@ ramsz	= $ce	; word, b-e
 
 zporg	= $d0	; 24 bytes of code
 
+#if SETBODY
+xstybase = $f0	; word, l-e
+#endif
 #if FGCOLOR
 rfgcol  = $f2	; current fg color
 #endif
@@ -3844,17 +3847,54 @@ v1
 ;	jmp op_bstyle ; Version 1.x = body style
 	.)
 
-op_bstyle ; Currently does nothing except error if in a span
+; Set body style class (color palette on c64)
+op_bstyle
 	.(
 	lda	nspan
 	ora	stflag
-	bne err
-	jsr fetchindex ; Don't leave the operand lying around
-	jmp fetchnext ; We didn't touch Y, but op_67 did
+	bne	err
+	jsr	fetchindex	; fetch operand no matter what
+#if SETBODY
+	tya
+	pha
+	jsr	findxsty
+	bcc	fail		; ignore if not found, don't fail
+	jsr	io_bstyle
+fail
+	pla
+	tay
+#endif
+	jmp	fetchnext
 err
 	lda	#7
 	jmp	error
 	.)
+
+#if SETBODY
+findxsty
+	.(
+	; scan for the record in operlsb
+	ldy	#0
+scanloop
+	lda	(xstybase),y
+	cmp	#$ff
+	beq	notfound	; $ff = terminator
+	cmp	operlsb+0
+	beq	found		; found the class index
+	iny
+	tya
+	sec	; + 1
+	adc	(xstybase),y	; Y += reclen + 1
+	tay
+	bne	scanloop
+found
+	sec	; C = found
+	rts
+notfound
+	clc
+	rts
+	.)
+#endif
 
 op_en_lv_st
 	.(
@@ -9934,19 +9974,19 @@ done
 
 initengine4
 	; Read the style table from the USTY
-	; chunk (revision 12). Both arrays
+	; chunk (revision 13). Both arrays
 	; are blitted to the heap and
 	; stybase points at the first one.
 	;
 	; The header is
 	;   0 tag       1 nclass
-	;   2 nxsty     3 xstysize
+	;   2 nxsty     3 reserved
 	;   4 totalwords (b-e)
-	;   6 xstyoff   (b-e, from the
-	;                record base)
+	;   6 xstyoff   (b-e, from the record base)
 	; followed by the two arrays, in
-	; that order, padded to
-	; totalwords*2 bytes.
+	; that order (xsty is length-
+	; describing records ended by $ff),
+	; padded to totalwords*2 bytes.
 
 	lda	chnklsb+CH_USTY
 	sta	virdata+2
@@ -9964,6 +10004,16 @@ initengine4
 	sty	stybase+1
 	stx	phydata
 	sty	phydata+1
+
+#if SETBODY
+	lda	databuf+7
+	clc
+	adc	stybase
+	sta	xstybase
+	lda	databuf+6
+	adc	stybase+1
+	sta	xstybase+1
+#endif
 
 	lda	databuf+5
 	asl

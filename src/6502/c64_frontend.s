@@ -23,6 +23,7 @@ MEASURE_TIME	= 0
 UNDO		= 1
 SAVERESTORE	= 1
 FGCOLOR		= 1
+SETBODY		= 1
 
 DEFWIDTH	= 40
 PREXTRA		= 8
@@ -42,6 +43,8 @@ CH_PROG1	= $1c
 CH_PROG2	= $1d
 CH_PROG3	= $1e
 CH_PROG4	= $1f
+
+STATUS_COLOR	= 15
 
 ioparam	= $02	; word
 lfsr	= $04	; word
@@ -133,7 +136,7 @@ k_ptr	= $fb
 ; 0800-083f 00-07 cursor sprite
 ; 0840-0847 08    backspace
 ; 0848-084f 09    A-ring at init
-; 0850-0867 0a-0c 24 unused bytes
+; 0850-0867 0a-0c 24 unused bytes (temporaries)
 ; 0868-086f 0d    return
 ; 0870-087f 0e-0f filename buffer
 ; 0880-089f 10-13 cursor keys
@@ -146,6 +149,8 @@ k_ptr	= $fb
 fnbuf	= $0870	; 16 bytes
 wrapbuf	= $08a0	; 40 bytes
 keyq	= $0bf8	; 8 bytes
+
+oldnorm	= $0851	; previous normal color
 
 KEYQLEN		= 8
 FNAMESZ	= 16
@@ -521,7 +526,7 @@ io_mstyle
 	pla
 	and	#7
 	tax
-	lda	palette,x
+	lda	palette+4,x
 	sta	currfg
 	rts
 color_override
@@ -531,7 +536,11 @@ color_override
 	pla
 	sta	currfg
 	rts
-palette
++palette
+	.byt	$f	; background
+	.byt	$f	; border
+	.byt	$8	; cursor
+	.byt	$b	; status area
 	.byt	$0	; normal = black
 	.byt	$1	; reverse = white (warm)
 	.byt	$b	; bold = dark gray (light)
@@ -548,6 +557,97 @@ palette
 ; c gray d light green e light blue f light gray
 
 ; The current palette was decided at https://intfiction.org/t/help-dialog-choose-a-commodore-64-color-palette/81746/2 but see that post for some of the other options considered and how people felt about them
+
+#if SETBODY
+io_bstyle
+	; set body style
+	; y = offset to xsty record (index, reclen, data...)
+	; base in xstybase
+	.(
+	lda	palette+4
+	sta	oldnorm	; remember old normal
+
+	iny
+	ldx	#0
+loop
+	iny
+	lda	(xstybase),y
+	and	#15
+	sta	palette,x
+	lda	(xstybase),y
+	lsr
+	lsr
+	lsr
+	lsr
+	inx
+	sta	palette,x
+	inx
+	cpx	#12
+	bcc	loop
+
+	lda	palette+4
+	cmp	oldnorm
+	beq	noremap
+	sta	currfg
+	jsr	syncspace
+	jsr	io_mflush
+	jsr	remapcram
+noremap
+	rts
+	.)
+
+remapcram
+	; After a palette change, remap existing
+	; body text colors.
+	; Change everything to new normal color,
+	; except status bar.
+
+	.(
+	inc	1	; io
+
+	lda	#<$d800
+	ldy	#>$d800
+	ldx	statush
+	beq	nost
+rowloop			; skip the status rows
+	clc
+	adc	#40
+	bcc	nohi
+	iny
+nohi
+	dex
+	bne	rowloop
+nost
+	sta	k_ptr
+	sty	k_ptr+1
+
+	lda	#25
+	sec
+	sbc	statush
+	sta	f_temp		; rows to do
+
+rowloop2
+	lda	palette+4	; new normal
+	ldy	#39
+chars
+	sta	(k_ptr),y
+	dey
+	bpl	chars
+
+	lda	k_ptr
+	clc
+	adc	#40
+	sta	k_ptr
+	bcc	nohi2
+	inc	k_ptr+1
+nohi2
+	dec	f_temp
+	bne	rowloop2
+
+	dec	1
+	rts
+	.)
+#endif ; SETBODY
 
 io_mprogress
 	; input x = progress
@@ -648,7 +748,7 @@ loop1
 	bpl	loop1
 
 	ldy	#39
-	lda	#$f
+	lda	#STATUS_COLOR
 loop2
 	sta	(stcram),y
 	dey
@@ -775,7 +875,7 @@ io_scommit
 loop
 	lda	wrapbuf,y
 	sta	vm,y
-	lda	#$f
+	lda	#STATUS_COLOR
 	sta	$d800,y
 	dey
 	bpl	loop
@@ -1407,13 +1507,23 @@ k_end
 	rts
 	.)
 
+k_setcolors
+	.(
+	lda	palette+0
+	sta	$d021
+	lda	palette+1
+	sta	$d020	; set border
+	lda	palette+2
+	sta	$d027	; set cursor
+	rts
+	.)
+
 k_begin
 	.(
 	inc	1	; io
 	lda	#0
 	sta	$d01a
-	lda	#$f
-	sta	$d021
+	jsr	k_setcolors
 	jsr	swapzp
 	inc	1	; kernal
 	lda	$dc0d
@@ -2310,7 +2420,7 @@ irq
 	lda	#>irq2
 	sta	$ffff
 
-	lda	#$b
+	lda	palette+3
 	sta	$d021
 nost
 	pla
@@ -2332,7 +2442,7 @@ irq2
 	;dec	$d020
 	pha
 	lda	1
-	pha
+		pha
 	lda	#$35
 	sta	1
 
@@ -2349,8 +2459,7 @@ irq2
 	nop
 	nop
 
-	lda	#$f
-	sta	$d021
+	jsr	k_setcolors
 
 	lsr	$d019
 	pla
@@ -2586,12 +2695,6 @@ loop
 	lda	#$12
 	sta	$d018
 
-	lda	#$f
-	sta	$d020
-	sta	$d021
-
-	lda	#$8
-	sta	$d027
 	lda	#$00
 	sta	$d015
 	sta	$d017
@@ -2599,6 +2702,8 @@ loop
 	sta	$d01c
 	lda	#$01
 	sta	$d01b
+
+	jsr	k_setcolors
 
 	lda	#<irq
 	sta	$fffe
