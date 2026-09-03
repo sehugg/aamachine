@@ -91,6 +91,22 @@ static const struct sty_target sty_apple2 = {
 	40, 80, 20
 };
 
+// Every target a -iftf-sys-<target>- prefix may name. Used to tell a
+// declaration meant for another machine (silent: the same source is built
+// for each target in turn) from a typo in the target name (warned about).
+static const struct sty_target *const sty_targets[] = {
+	&sty_aambox, &sty_c64, &sty_apple2
+};
+
+static int known_target(const char *name) {
+	int i;
+
+	for(i = 0; i < (int) (sizeof(sty_targets) / sizeof(sty_targets[0])); i++) {
+		if(!strcmp(name, sty_targets[i]->name)) return 1;
+	}
+	return 0;
+}
+
 static const struct sty_target *sty_target;
 static uint8_t *sty_payload;    // malloc'd USTY chunk payload (leaked, tool lifetime)
 static uint32_t sty_size;
@@ -163,14 +179,29 @@ static int sty_quiet;
 // chunk does not carry a style-name: declaration for it.
 static const char *sty_name = 0;
 
+static void vswarn(int quietable, const char *fmt, va_list ap) {
+	char msg[1024];
+	if(quietable && sty_quiet) return;
+	vsnprintf(msg, sizeof(msg), fmt, ap);
+	warning(WARN_STYLE, "style class %s: %s", sty_name ? sty_name : "(unknown)", msg);
+}
+
 static void swarn(const char *fmt, ...) {
 	va_list ap;
-	char msg[1024];
-	if(sty_quiet) return;
 	va_start(ap, fmt);
-	vsnprintf(msg, sizeof(msg), fmt, ap);
+	vswarn(1, fmt, ap);
 	va_end(ap);
-	warning(WARN_STYLE, "style class %s: %s", sty_name ? sty_name : "(unknown)", msg);
+}
+
+// An author mistake, as opposed to a fallback declaration that a
+// -iftf-sys- line in the same class overrides. Nothing in the class can
+// make a malformed -iftf- prefix correct, so these are never silenced by
+// sty_quiet (see parse_decl).
+static void swarn_strict(const char *fmt, ...) {
+	va_list ap;
+	va_start(ap, fmt);
+	vswarn(0, fmt, ap);
+	va_end(ap);
 }
 
 // Parse a named VIC-II color or a bare palette index (0..15).
@@ -303,13 +334,45 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 		char *prop;
 		key += 10;
 		prop = strchr(key, '-');
-		if(!prop) return;
+		if(!prop) {
+			// "-iftf-sys-c64" with no property name after the target.
+			if(!pass)
+				swarn_strict("Malformed conditional declaration; expected -iftf-sys-<target>-<property>.");
+			return;
+		}
 		*prop = 0;
-		// ignore if not the target system
+		// A declaration that names another machine is silent, by design:
+		// one story is built for every target in turn, and each build is
+		// entitled to complain only about its own declarations. A name that
+		// is no target at all is a typo, and can never take effect anywhere.
 		if(strcmp(key, sty_target->name)) {
+			if(!pass && !known_target(key))
+				swarn_strict("Unknown target \"%s\" in a conditional declaration; the known targets are aambox, c64 and apple2.", key);
 			return;
 		}
 		key = prop + 1;
+	} else if(!strncmp(key, "-iftf-", 6) && strcmp(key, "-iftf-reverse-video")) {
+		// -iftf-reverse-video is Dialog's own conditional property and
+		// arrives without a target. Every other -iftf- key is either the
+		// older -iftf-<target>-<property> spelling or a typo; the bundler
+		// does not honour either, so say so rather than let a declaration
+		// that can never take effect pass in silence.
+		if(!pass) {
+			char tgt[32];
+			char *seg = key + 6, *dash = strchr(seg, '-');
+			int legacy = 0;
+
+			if(dash && (size_t) (dash - seg) < sizeof(tgt)) {
+				memcpy(tgt, seg, (size_t) (dash - seg));
+				tgt[dash - seg] = 0;
+				legacy = known_target(tgt);
+			}
+			if(legacy)
+				swarn_strict("%s is not a conditional declaration; write -iftf-sys-%s-<property>.", key, tgt);
+			else
+				swarn_strict("Unrecognized conditional declaration \"%s\"; conditional declarations look like -iftf-sys-<target>-<property>.", key);
+		}
+		return;
 	}
 	if(prefixed != pass) return;
 
@@ -321,9 +384,6 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 		else if(!strcmp(param, "none")) c->styoff |= AASTYLE_REVERSE;
 		else if(strcmp(param, "inherit"))
 			swarn("Invalid value for %s: %s", key, value);
-	} else if(!strcmp(key, "width") || !strcmp(key, "height")) {
-		swarn("Invalid value for %s: %s", key, value);
-		return;
 	}
 
 	// Body colors require the -iftf-sys- prefix
@@ -458,7 +518,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 
 	// A prefix that named the target but a property the bundler does not know.
 	if(prefixed && !matched) {
-		swarn("-iftf-sys-%s-%s is not supported yet.", sty_target->name, key);
+		swarn_strict("-iftf-sys-%s-%s is not a property %s supports; it was ignored.", sty_target->name, key, sty_target->name);
 	}
 	// Anything else is ignored, as an interpreter must per the spec.
 }

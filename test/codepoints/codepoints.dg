@@ -210,6 +210,15 @@
 	font-size: 200%;
 	margin-bottom: 1em;
 
+%% Body style demo
+
+(style class @bodystyle)
+	-iftf-sys-c64-background-color: black;
+	-iftf-sys-c64-border-color: blue;
+	-iftf-sys-c64-status-color: brown;
+	-iftf-sys-c64-cursor-color: green;
+	-iftf-sys-c64-normal-color: yellow;
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% State
 
@@ -721,6 +730,7 @@
 	(line) 0,5,6,7 = height edge cases
 	(line) W = probe the wrap buffer
 	(line) Plus/minus = nudge page 12's count
+	(line) S = set body style
 	(line) Q = quit
 	(line)
 	(show page)
@@ -766,6 +776,7 @@
 (handle 5)	(now) (bar height 5)
 (handle 6)	(now) (bar height 6)
 (handle 7)	(now) (bar height 7)
+(handle @s)	(body style @bodystyle)
 (handle $)
 
 (next page)

@@ -20,6 +20,7 @@ HAVE_QUIT	= 1
 HAVE_STATUS	= 0
 HAVE_STYLE	= 0
 FGCOLOR		= 0
+SETBODY		= 0
 
 wrappos		= $00
 xpos		= $01

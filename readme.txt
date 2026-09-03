@@ -142,6 +142,9 @@ Release notes:
 
 		Documentation: New "8-bit" page covering the USTY chunk.
 
+		C64 interpreter: Handle SETBODY opcode, changing color
+		palette with new -iftf-sys-c64-* attributes.
+
 	1.0.3:
 
 		New Apple II interpreter:

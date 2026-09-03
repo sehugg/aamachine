@@ -110,6 +110,7 @@ HAVE_STYLE	= 0	; reverse alone is not enough to qualify
 SAVERESTORE	= 1
 UNDO		= 1
 FGCOLOR		= 0
+SETBODY		= 0
 
 TRACE_INST	= 0
 TRACE_STORE	= 0

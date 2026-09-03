@@ -20,7 +20,7 @@ check_acme:
 		exit 1; fi
 
 clean:
-			rm -rf aambox6502 aambox_frontend.bin cruncher labels c64.labels mkfont
+			rm -rf aambox6502 aambox_frontend.bin cruncher labels c64.labels mkfont a2_frontend.lst c64_frontend.lst
 			rm -f a2_frontend.bin a2_prorwts2.bin a2.labels a2.system a2_0boot.bin a2_sboot.bin a2_sboot.labels
 
 mkfont:			mkfont.c

@@ -19,6 +19,8 @@ specific target computers.
 * The `USTY` chunk replaces `LOOK` on 8-bit targets.
 * 8-bit interpreters no longer parse CSS at startup. The style table is
   precompiled by the bundler.
+* The `USTY` body array records the palette that `SET_BODY` applies on the
+  Commodore 64.
 
 == The USTY chunk
 
@@ -45,7 +47,7 @@ The USTY format is identified by integer, truncated to a single byte. The
 target is named separately by the platform byte in the header, so the format
 revision and the target can evolve independently.
 
-Version 0 is described here.
+Version 1 is described here.
 
 === Header
 
@@ -163,13 +165,64 @@ record base. Each record is
 ----
 
 and the array is a single `$ff` index byte when empty. The array is scanned,
-not indexed, by the opcode that consumes it.
+not indexed, by the opcode that consumes it. Because the scan runs with an
+8-bit index, the array including its terminator must not exceed 255 bytes.
 The chunk is padded to an even length so that `totalwords * 2` is exactly the
 size of the resident table.
 
-No target emits body records in
-version 0; the layout is fixed here so that they can be added without moving
-the class records.
+Only the Commodore 64 emits body records, so `nxsty` is 0 for aambox and the
+Apple II. On the Commodore 64, `datalen` is 6 and the payload is the whole
+screen palette:
+
+[cols="1,2,2"]
+|===
+| Byte | Low nibble | High nibble
+
+| 0 | background | border
+| 1 | cursor (`$d027`) | status
+| 2 | normal | reverse
+| 3 | bold | bold-reverse
+| 4 | italic | italic-reverse
+| 5 | bold-italic | bold-italic-reverse
+|===
+
+Each byte packs two palette entries, low nibble first. A palette value is one
+of the color names or indices listed in the previous section.
+
+A body record is a complete palette snapshot. A field the style class does
+not mention keeps the target's compiled-in default, not the value that was in
+effect. Applying a record with `SET_BODY` rewrites the palette and recolors
+body text already on screen to the new `normal` entry, while the status bar
+is drawn with its own `status` entry. `SET_BODY` with a class index that has
+no body record is a no-op: the array is a list of exceptions to the default
+palette, not a table covering every class.
+
+The fields come from these declarations, which are only honored with the
+`-iftf-sys-c64-` prefix:
+
+[cols="1,2"]
+|===
+| Field | Declaration
+
+| background | `-iftf-sys-c64-background-color`
+| border | `-iftf-sys-c64-border-color`
+| cursor | `-iftf-sys-c64-cursor-color`
+| status | `-iftf-sys-c64-status-color`
+| normal | `-iftf-sys-c64-normal-color`
+| reverse | `-iftf-sys-c64-reverse-color`
+| bold | `-iftf-sys-c64-bold-color`
+| bold-reverse | `-iftf-sys-c64-bold-reverse-color`
+| italic | `-iftf-sys-c64-italic-color`
+| italic-reverse | `-iftf-sys-c64-italic-reverse-color`
+| bold-italic | `-iftf-sys-c64-bold-italic-color`
+| bold-italic-reverse | `-iftf-sys-c64-bold-italic-reverse-color`
+|===
+
+`-iftf-sys-c64-normal-color` names the palette entry for unstyled text;
+`-iftf-sys-c64-color` is a different property, the per-class foreground kept
+in the class record's `fg` field, and the two never collide. Plain
+`background-color` and `border-color` are web-only and are ignored on every
+8-bit target.
 
 == Conditional declarations
 
@@ -181,7 +234,7 @@ named target, where `<target>` is `c64`, `apple2`, or `aambox`. So
 -iftf-sys-apple2-reverse-video: reverse;
 ----
 
-sets the foreground color only the Commodore 64, and reverse video only on the Apple II.
+sets the foreground color only on Commodore 64, and reverse video only on the Apple II.
 
 A prefixed declaration overrides an unprefixed declaration of the same property,
 regardless of their order in the style sheet.
