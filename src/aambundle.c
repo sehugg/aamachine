@@ -18,9 +18,6 @@ uint32_t storysize;
 static char *dirname;
 static char *storyfile;
 
-// Warning levels are set directly by getopt_long through the longopts table
-// Keep usage() updated with new warnings; they only appear with --help-all.
-
 int charset_warning_level = WARN_DEFAULT;
 int input_warning_level = WARN_DEFAULT;
 int style_warning_level = WARN_DEFAULT;
@@ -29,14 +26,7 @@ int nwarning;
 static int warnings_as_errors;
 static int show_all_help;
 
-// One bit per warn_id_t: set once the "Use --no-warn-..." hint has been
-// printed for that kind, so a story that triggers dozens of style warnings
-// does not print the same hint dozens of times.
 static unsigned int warned_mask;
-
-// Maps each warning kind to the flag that disables it and to its level
-// variable, so warning() can suggest the right --no-warn-* flag -- unless
-// the warning was forced on with --warn-*. Keep in step with warn_id_t.
 
 static const struct {
 	const char *category;
@@ -51,15 +41,14 @@ static const struct {
 void vwarning(warn_id_t id, const char *fmt, va_list ap) {
 	char msg[1024];
 
-	// --no-warn-* really turns the warning off, not just the hint. The
-	// level variable defaults to WARN_DEFAULT; only --warn-* (WARN_ALWAYS)
-	// or --no-warn-* (WARN_NEVER) change it.
+	// Did we turn this warning off?
 	if(id < WARN_COUNT && warn_info[id].level && *warn_info[id].level == WARN_NEVER) return;
 
 	vsnprintf(msg, sizeof(msg), fmt, ap);
 
 	fprintf(stderr, "%s %s\n", id==WARN_ERROR || warnings_as_errors ? "Error:" : "Warning:", msg);
 	if(id < WARN_COUNT && warn_info[id].level && *warn_info[id].level != WARN_ALWAYS) {
+		// Give a hint for the disable warning option the first time.
 		if(!(warned_mask & (1u << id))) {
 			fprintf(stderr, "(Use --no-warn-%s to disable %s warnings.)\n",
 				warn_info[id].category, warn_info[id].category);
@@ -299,9 +288,7 @@ static void emit_chunk(const char *id, const uint8_t *data, uint32_t size) {
 	outsize += total;
 }
 
-// Filler, emitted as a chunk of its own so that readers skip it like any
-// other unrecognized chunk.
-
+// The padding is a "    " chunk
 static void emit_padding(uint32_t pad) {
 	assert(pad >= 8);
 	out_reserve(pad);
@@ -360,26 +347,11 @@ void rewrite_chunks(chunk_rewriter_t rewriter, int align_writ) {
 
 		if(action != CHUNK_DROP) {
 			if(align_writ && !memcmp(newid, "WRIT", 4)) {
-				// The 6502 engine preloads whole 256-byte pages of
-				// compressed text (initaddpage in engine.s), keeping
-				// only the top two bytes of the WRIT address, so
-				// starting the chunk on a page boundary leaves all but
-				// eight bytes of the first pinned page usable.
-				//
-				// pad comes from the *output* offset, so this has to
-				// run after everything ahead of WRIT has been
-				// rewritten -- replacing an earlier chunk with one of
-				// a different size shifts WRIT, and changes both how
-				// much padding it needs and whether padding is worth
-				// inserting at all.
-
+				// The 6502 engine expects the WRIT chunk to be page-aligned
 				pad = 0x100 - (outsize & 0xff);
 				assert(!(pad & 1));
 
-				// Decline when the chunk is already aligned (pad is
-				// 0x100) or when padding would cost more than the <= 16
-				// bytes of first-page waste it would save.
-
+				// Only align if we can write at least 8 bytes
 				if(pad < 0xf0) {
 					if(pad < 8) pad += 0x100;
 					emit_padding(pad);

@@ -189,12 +189,6 @@ void decode_look(struct chunk *ch) {
 //                           ; ended by $ff in an index byte
 //       pad                 ; 0 or 1 bytes, to totalwords * 2
 //
-// The class records start at the fixed USTY_HDRSIZE offset and are
-// USTY_RECSIZE bytes each, so xstyoff follows from the counts; it is
-// stated in the header only so the engine need not compute it. The xsty
-// record payload shape follows from the tag's target nibble; datalen is
-// what bounds the walk, so no stride is needed to decode the array.
-//
 // Keep in step with the record layouts in gen_usty.c.
 
 static void put_style_bits(uint8_t bits) {
@@ -226,9 +220,6 @@ static void decode_xsty(uint8_t *d, uint8_t tag, int nrec,
 		printf("\n");
 	}
 }
-
-// The record array. The body array is dumped from the offsets the walk
-// collected.
 
 static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
 	uint8_t nclass, int nrec, const uint32_t *xrecoffs)
@@ -266,8 +257,7 @@ static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
 			put_style_bits(r[USTY_F_STYOFF]);
 		}
 		if(r[USTY_F_FG] != 0x80) printf(" fg=%02x", r[USTY_F_FG]);
-		// An all-default class still has a record here; revision 9 was the
-		// layout that could leave it out.
+		// An all-default class still has a record here
 		if(!r[0] && !r[1] && !r[2] && !r[3]
 		&& !r[4] && !r[5] && !r[6] && r[7] == 0x80) {
 			printf(" all defaults");
@@ -278,13 +268,6 @@ static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
 	if(nrec) decode_xsty(d, tag, nrec, xrecoffs);
 	printf("\n");
 }
-
-// Revision 13: the class records under a header that also states the size
-// of the resident block and where the body array starts inside it, and a
-// body array of self-describing records ended by $ff. The stated figures
-// are derivable, so they are cross-checked here -- a stale offset
-// disagreeing with a count is the one hazard stating them reintroduces,
-// and this is where it gets caught.
 
 static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 	uint8_t nclass, nxsty;
@@ -311,7 +294,6 @@ static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 	printf("Offsets: rec %u  xsty %u  (%u words resident)\n",
 		recoffs, xstyoffs, totalwords);
 
-	// The two stated figures against the two counts.
 	wantxsty = nclass * USTY_RECSIZE;
 	if(xstyrel != wantxsty) {
 		printf("Warning: header says the body array is at +%u, but %d classes "
@@ -321,8 +303,7 @@ static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 	}
 
 	// Walk the body array the way the engine's scan does: (index, datalen,
-	// data), ended by $ff in an index byte. This bounds every read and
-	// catches a truncated or padded-over array at inspection time.
+	// data), ended by $ff in an index byte.
 	walked = 0;
 	nrec = 0;
 	while(1) {

@@ -11,13 +11,12 @@
 //
 // Parses the LOOK chunk (CSS declarations) once, in C, and emits the compact
 // binary table defined in aamshow.c. USTY replaces LOOK on the 6502
-// targets: the c64 and apple2 interpreters have no style sheet parser.
+// targets which have no style sheet parser.
 //
 // The parser mirrors both the dialog compiler's effective CSS subset
-// (~/if/dialog/src/frontend.c:2899-3000) and the 6502 engine's parser
-// (initengine4 in engine.s): case-sensitive keys, unknown properties
-// ignored, width/height accept % (relative) and em/ch/en (absolute), margins
-// absolute only, fractional units truncated.
+// (~/if/dialog/src/frontend.c:2899-3000): case-insensitive keys,
+// unknown properties ignored, width/height accept % (relative)
+// and em/ch/en (absolute), margins absolute only, fractional units truncated.
 // ============================================================================
 
 // The high nibble of the tag byte names the target, the low nibble the
@@ -31,9 +30,8 @@
 
 #define NOCOLOR   0x80    // "$80 = not set" sentinel for the sty fg field
 
-// Bytes of body payload per c64 xsty record: the record's datalen, not
-// counting the (index, datalen) prefix. Must be <= USTY_MAX_XSTYSIZE
-#define XSTY_SIZE_C64 7
+// Bytes of body payload per c64 xsty record
+#define XSTY_SIZE_C64 6
 
 // xsty payload for C64.
 enum {
@@ -58,7 +56,7 @@ static const char *bodyprops[BODY_N] = {
 	"bold-italic-reverse-color",    // 7  bold italic reverse
 };
 
-// The c64 frontend's compiled-in defaults: a light grey screen and border
+// The c64 frontend's compiled-in defaults.
 // Keep this in sync with c64 frontend.
 static const uint8_t c64_bodydef[BODY_N] = {
 	0x0f, 0x0f,             // background, border
@@ -292,15 +290,11 @@ static int parse_color(const char *v, int *out) {
 
 // ----------------------------------------------------------------------------
 // CSS value parsing.
-
-// Length scan, in the spirit of frontend.c's "sscanf(str, "width : %d %s")":
-// one sscanf picks the number and the unit apart whatever whitespace sits
-// between them. %f rather than %d so that the fractional part is truncated
-// the way css_abs_rel in engine.s truncates it (".67em" is 0, not 67 rows).
-// The first-character guard keeps scanf's "nan"/"inf" extensions out.
-// Returns the number of conversions: 0 = not a length, 1 = bare number,
-// 2 = number and unit (*unit is then "" for a bare number, "%" or
-// "em"/"ch"/"en").
+// Returns the number of conversions:
+//   0 = not a length
+//   1 = bare number,
+//   2 = number and unit
+//       (*unit is "" for a bare number, "%" or "em"/"ch"/"en")
 static int scan_length(const char *value, int *val, char *unit) {
 	float f;
 	int n;
@@ -310,7 +304,7 @@ static int scan_length(const char *value, int *val, char *unit) {
 	unit[0] = 0;
 	n = sscanf(value, "%f %15s", &f, unit);
 	if(n < 1) return 0;
-	*val = (int) f;         // truncated, like the engine
+	*val = (int) f;         // fractions are truncated
 	return n;
 }
 
@@ -322,12 +316,9 @@ static int isabsunit(const char *unit) {
 // "-iftf-sys-c64-color: red". The line is copied so the key can be lowercased
 // in place; 'key' starts at the buffer, 'value' points into it.
 //
-// Declarations are parsed in two passes per class (see parse_look): pass 0
-// takes the unprefixed ones, pass 1 the -iftf- ones. A -iftf- declaration
-// is an author's statement about this machine specifically, so it wins
-// over the same property without the prefix no matter which order the
-// style sheet lists them in -- the pass does what "last declaration wins"
-// would do only if the -iftf- line happened to come last.
+// Declarations are parsed in two passes per class (see parse_look):
+// - pass 0 takes the unprefixed ones
+// - pass 1 the -iftf- ones so they override
 static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	char buf[256];
 	char *colon, *key, *value, *bang, *q;
@@ -381,9 +372,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 		return;
 	}
 
-	// Body colors are only honored when the declaration named the target,
-	// because on the web these properties either mean something different
-	// (a div's background is not the screen background) or do not exist.
+	// Body colors require the -iftf-sys- prefix
 	if(prefixed && sty_target->bodydef) {
 		for(i = 0; i < BODY_N; i++) {
 			if(!strcmp(key, bodyprops[i])) {
@@ -431,7 +420,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 		int n = scan_length(value, &v, unit);
 		matched = 1;
 		if(n >= 1 && (!unit[0] || isabsunit(unit))) {
-			// Absolute only: a percent of what, on a text screen?
+			// Absolute only
 			if(!strcmp(key, "margin-top")) c->mtop = v;
 			else if(!strcmp(key, "margin-bottom")) c->mbottom = v;
 			else c->padleft = v;
@@ -503,15 +492,9 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 		char param[32];
 		matched = 1;
 		sscanf(value, "%31s", param);
-		// "reverse" is not a standard CSS value, but there is no standard
-		// CSS property for reverse video, and unrecognized values are
-		// explicitly not an error in CSS.
 		if(strstr(value, "reverse")) {
 			c->styon |= AASTYLE_REVERSE;
 		} else if(strcmp(param, "inherit")) {
-			// "none" is the explicit off; any other value (underline is
-			// the classic web one) neither sets nor unsets reverse on
-			// the web, so warn rather than quietly turning it off.
 			c->styoff |= AASTYLE_REVERSE;
 			if(!strcmp(key, "text-decoration") && strcmp(param, "none")) {
 				swarn("Invalid value for text-decoration: %s (only reverse, none and inherit are supported).", value);
@@ -523,10 +506,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 			int ci;
 			if(parse_color(value, &ci)) {
 				c->fg = ci;
-				// An unprefixed color identical to the machine's default
-				// screen background renders invisible text. An author who
-				// wants that deliberately would have said so with
-				// -iftf-sys-<sys>-color, which is exempt.
+				// warn if color is same as default background color
 				if(!prefixed && sty_target->bodydef &&
 					ci == sty_target->bodydef[BODY_BG]) {
 					swarn("color %s matches the default background color on %s; "
@@ -540,10 +520,6 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	} else if(!strcmp(key, "background-color")) {
 		matched = 1;
 		if(!prefixed) {
-			// Only -iftf-sys-<sys>-background-color fills the body record; the
-			// unprefixed form does nothing on any 6502 target. (On the web
-			// it colors the element itself, not the screen, so the two
-			// cannot share a declaration.)
 			if(sty_target->bodydef) {
 				swarn("The background-color property is web-only. To set the screen background on %s, use -iftf-sys-%s-background-color.",
 					sty_target->name, sty_target->name);
@@ -570,10 +546,6 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	// Anything else is ignored, as an interpreter must per the spec.
 }
 
-// A revision 11 record: everything about one class in eight bytes, laid out
-// in engine.s's STY_* order so that stybase + class * 8 keeps working and
-// none of the engine's read sites move.
-
 static void make_flat(uint8_t *r, const styclass *c) {
 	uint8_t flags = c->flags & (USTY_FL_RELW | USTY_FL_RELH);
 
@@ -590,10 +562,6 @@ static void make_flat(uint8_t *r, const styclass *c) {
 	r[USTY_F_FLAGS] = flags;
 	r[USTY_F_FG] = c->fg;
 }
-
-// Body records are keyed on the raw class index because SET_BODY takes a
-// class operand; the caller writes the (index, datalen) prefix and this
-// fills the payload that follows it.
 
 static void make_xsty(uint8_t *x, int classidx, const styclass *c) {
 	int j;
@@ -613,8 +581,7 @@ static uint16_t get16(const uint8_t *p) {
 
 // ----------------------------------------------------------------------------
 // LOOK parse: read the class count, then walk each class's declaration
-// block (null-terminated strings, a lone null byte ends the block), the
-// same layout engine.s:9910-9961 and get_styles() in engine.js use.
+// block (null-terminated strings, a lone null byte ends the block)
 
 static styclass *parse_look(int *nclassp) {
 	uint8_t *look;
