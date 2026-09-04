@@ -180,10 +180,12 @@
 // The chunk layout is specified in docs/aam-specification-1.1-8bit.adoc.
 // USTY_VERSION is an internal format version (0..255), bumped to keep a
 // stale table from being misread; it may wrap.
-#define USTY_VERSION		0
+#define USTY_VERSION		1
 
 #define USTY_HDRSIZE		8	// USTY header size
 #define USTY_RECSIZE		8	// USTY record size
+#define USTY_MAX_XSTYBYTES	255	// maximum size of the xsty array
+#define USTY_XSTY_END		0xff	// xsty index byte that ends the array
 
 // USTY header byte 3 names the target platform by index. The values are
 // stable IDs, so new targets are appended without renumbering the rest.
