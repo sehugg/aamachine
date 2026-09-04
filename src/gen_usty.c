@@ -30,28 +30,69 @@
 
 #define NOCOLOR   0x80    // "$80 = not set" sentinel for the sty fg field
 
+// Bytes of body payload per c64 xsty record
+#define XSTY_SIZE_C64 6
+
+// xsty payload for C64.
+enum {
+	BODY_BG = 0,
+	BODY_BORDER = 1,
+	BODY_CURSOR = 2,
+	BODY_STATUS = 3,
+	BODY_PAL = 4,		// BODY_PAL + (style & 7)
+	BODY_N = 12
+};
+
+static const char *bodyprops[BODY_N] = {
+	"background-color", "border-color",
+	"cursor-color", "status-color",
+	"normal-color",                 // 0  -
+	"reverse-color",                // 1  reverse
+	"bold-color",                   // 2  bold
+	"bold-reverse-color",           // 3  bold reverse
+	"italic-color",                 // 4  italic
+	"italic-reverse-color",         // 5  italic reverse
+	"bold-italic-color",            // 6  bold italic
+	"bold-italic-reverse-color",    // 7  bold italic reverse
+};
+
+// The c64 frontend's compiled-in defaults.
+// Keep this in sync with c64 frontend.
+static const uint8_t c64_bodydef[BODY_N] = {
+	0x0f, 0x0f,             // background, border
+	0x08, 0x0b,             // cursor, status
+	0x00, 0x01,             // -, reverse
+	0x0b, 0x07,             // bold, bold reverse
+	0x06, 0x02,             // italic, italic reverse
+	0x0e, 0x0a,             // bold italic, bold italic reverse
+};
+
 struct sty_target {
 	const char *name;
 	uint8_t tag;
 	int have_vic_color;     // per-character fg color (c64)
 	uint8_t stymask;        // AASTYLE_* bits the frontend can actually act on
+	const uint8_t *bodydef; // BODY_N defaults, or null if the target has no records
+	uint8_t bodylen;        // body payload bytes per record (the record's datalen);
+	                        // 0 if bodydef is null
+
 	int mincols, maxcols;	// 40 for c64, 40-80 for apple2, 80 for aambox
 	int maxrows;		// 20 for all
 };
 
 static const struct sty_target sty_aambox = {
 	"aambox", STY_TAG_AAMBOX, 0,
-	0,
+	0, 0, 0,
 	80, 80, 20
 };
 static const struct sty_target sty_c64 = {
 	"c64", STY_TAG_C64, 1,
-	AASTYLE_REVERSE | AASTYLE_BOLD | AASTYLE_ITALIC,
+	AASTYLE_REVERSE | AASTYLE_BOLD | AASTYLE_ITALIC, c64_bodydef, XSTY_SIZE_C64,
 	40, 40, 20
 };
 static const struct sty_target sty_apple2 = {
 	"apple2", STY_TAG_APPLE2, 0,
-	AASTYLE_REVERSE,
+	AASTYLE_REVERSE, 0, 0,
 	40, 80, 20
 };
 
@@ -69,6 +110,8 @@ typedef struct {
 	uint8_t flo;            // 0 none, 1 left, 2 right, 3 center
 	uint8_t align;          // 1 left, 2 right, 3 center
 	uint8_t flags;          // STY_RELW | STY_RELH
+	uint8_t body[BODY_N];   // xsty fields, only valid if hasbody
+	uint8_t hasbody;        // class declared at least one body color
 } styclass;
 
 // ----------------------------------------------------------------------------
@@ -289,6 +332,7 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 	char *colon, *key, *value, *bang, *q;
 	int prefixed = 0;
 	int matched = 0;
+	int i;
 
 	if(len >= (int) sizeof(buf)) len = sizeof(buf) - 1;
 	memcpy(buf, p, len);
@@ -334,6 +378,23 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 			else swarn("Invalid value for %s: %s", key, value);
 		}
 		return;
+	}
+
+	// Body colors require the -iftf-sys- prefix
+	if(prefixed && sty_target->bodydef) {
+		for(i = 0; i < BODY_N; i++) {
+			if(!strcmp(key, bodyprops[i])) {
+				int ci;
+				if(parse_color(value, &ci)) {
+					if(!c->hasbody) {
+						memcpy(c->body, sty_target->bodydef, BODY_N);
+						c->hasbody = 1;
+					}
+					c->body[i] = ci;
+				}
+				return;
+			}
+		}
 	}
 
 	if(!strcmp(key, "width") || !strcmp(key, "height")) {
@@ -453,9 +514,24 @@ static void parse_decl(styclass *c, const char *p, int len, int pass) {
 			int ci;
 			if(parse_color(value, &ci)) {
 				c->fg = ci;
+				// warn if color is same as default background color
+				if(!prefixed && sty_target->bodydef &&
+					ci == sty_target->bodydef[BODY_BG]) {
+					swarn("color %s matches the default background color on %s; "
+						"text with this class will be invisible unless (body style $Class) is used.",
+						value, sty_target->name);
+				}
 			}
 		} else {
 			swarn("color is not supported on %s and was ignored.", sty_target->name);
+		}
+	} else if(!strcmp(key, "background-color")) {
+		matched = 1;
+		if(!prefixed) {
+			if(sty_target->bodydef) {
+				swarn("The background-color property is web-only. To set the screen background on %s, use -iftf-sys-%s-background-color.",
+					sty_target->name, sty_target->name);
+			}
 		}
 	} else if(!strcmp(key, "display")) {
 		char param[32];
@@ -493,6 +569,18 @@ static void make_flat(uint8_t *r, const styclass *c) {
 	r[USTY_F_STYOFF] = c->styoff & sty_target->stymask;
 	r[USTY_F_FLAGS] = flags;
 	r[USTY_F_FG] = c->fg;
+}
+
+static void make_xsty(uint8_t *x, int classidx, const styclass *c) {
+	int j;
+
+	x[0] = c->body[BODY_BG] | (c->body[BODY_BORDER] << 4);
+	x[1] = c->body[BODY_CURSOR] | (c->body[BODY_STATUS] << 4);
+	for(j = 0; j < 4; j++) {
+		x[2 + j] = c->body[BODY_PAL + j * 2]
+			| (c->body[BODY_PAL + j * 2 + 1] << 4);
+	}
+	// TODO: warn if background/text colors match
 }
 
 static uint16_t get16(const uint8_t *p) {
@@ -617,12 +705,13 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 
 	recoffs = USTY_HDRSIZE;
 	xstyoffs = recoffs + nclass * USTY_RECSIZE;
-	reclen = 2;
-	maxnsty = 0;
+	reclen = 2 + sty_target->bodylen;       // index, datalen, payload
+	maxnsty = sty_target->bodylen?
+		(USTY_MAX_XSTYBYTES - 1) / reclen : 0;
 
 	// Upper bound: the full body array with its terminator, which is what
 	// the engine's one-page scan can reach.
-	size = xstyoffs + 1;
+	size = xstyoffs + USTY_MAX_XSTYBYTES + 1;
 
 	out = calloc(1, size);
 	if(!out) {
@@ -639,11 +728,22 @@ static uint8_t *build_usty_flat(uint32_t *sizep) {
 
 	for(i = 0; i < nclass; i++) {
 		make_flat(out + recoffs + i * USTY_RECSIZE, &cls[i]);
+		if(cls[i].hasbody) {
+			if(nxsty < maxnsty) {
+				uint8_t *x = out + xstyoffs + nxsty * reclen;
+				x[0] = i;
+				x[1] = sty_target->bodylen;
+				make_xsty(x + 2, i, &cls[i]);
+				nxsty++;
+			} else {
+				nover++;
+			}
+		}
 	}
 
 	// The array always ends in $ff, even empty: the terminator is the only
 	// thing that tells the engine's scan to stop.
-	out[xstyoffs + nxsty * reclen] = 0xff;
+	out[xstyoffs + nxsty * reclen] = USTY_XSTY_END;
 
 	if(nover) {
 		warning(WARN_STYLE, "Too many classes have -iftf-sys-%s- colors (max is %d) so some body styles were dropped.",

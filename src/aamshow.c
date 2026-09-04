@@ -204,6 +204,23 @@ static void put_style_bits(uint8_t bits) {
 static const char *float_names[] = {"none", "left", "right", "center"};
 static const char *align_names[] = {"none", "left", "right", "center"};
 
+static void decode_xsty(uint8_t *d, uint8_t tag, int nrec,
+	const uint32_t *recoffs)
+{
+	int i;
+
+	printf("\nxsty (%d body records):\n", nrec);
+	for(i = 0; i < nrec; i++) {
+		uint8_t *x = d + recoffs[i];
+		uint8_t idx = x[0], len = x[1];
+		int j;
+
+		printf("  %02x: class=%-3d datalen=%d payload:", i, idx, len);
+		for(j = 0; j < len; j++) printf(" %02x", x[2 + j]);
+		printf("\n");
+	}
+}
+
 static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
 	uint8_t nclass, int nrec, const uint32_t *xrecoffs)
 {
@@ -248,14 +265,17 @@ static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
 		printf("\n");
 	}
 
+	if(nrec) decode_xsty(d, tag, nrec, xrecoffs);
 	printf("\n");
 }
 
 static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 	uint8_t nclass, nxsty;
 	uint32_t recoffs, xstyoffs, totalwords, xstyrel;
+	uint32_t wantxsty, wantwords, blockbytes;
 	uint32_t xrecoffs[256];
-	int nrec = 0; // no xsty records yet
+	uint32_t walked;
+	int nrec;
 
 	if(size < USTY_HDRSIZE) {
 		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
@@ -273,6 +293,71 @@ static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 	printf("nclass: %d  nxsty: %d\n", nclass, nxsty);
 	printf("Offsets: rec %u  xsty %u  (%u words resident)\n",
 		recoffs, xstyoffs, totalwords);
+
+	wantxsty = nclass * USTY_RECSIZE;
+	if(xstyrel != wantxsty) {
+		printf("Warning: header says the body array is at +%u, but %d classes "
+			"of %d bytes put it at +%u.\n",
+			xstyrel, nclass, USTY_RECSIZE, wantxsty);
+		return;
+	}
+
+	// Walk the body array the way the engine's scan does: (index, datalen,
+	// data), ended by $ff in an index byte.
+	walked = 0;
+	nrec = 0;
+	while(1) {
+		uint8_t idx, len;
+
+		if(xstyoffs + walked + 1 > size) {
+			printf("Warning: body array runs past the end of the chunk with no $ff terminator.\n");
+			return;
+		}
+		idx = d[xstyoffs + walked];
+		if(idx == USTY_XSTY_END) {
+			walked++;               // the terminator belongs to the array
+			break;
+		}
+		if(xstyoffs + walked + 2 > size) {
+			printf("Warning: body record for class %d runs past the end of the chunk.\n", idx);
+			return;
+		}
+		len = d[xstyoffs + walked + 1];
+		if(len > USTY_MAX_XSTYSIZE) {
+			printf("Warning: body record for class %d has datalen %d, past the databuf cap (max %d).\n",
+				idx, len, USTY_MAX_XSTYSIZE);
+			return;
+		}
+		if(xstyoffs + walked + 2 + len > size) {
+			printf("Warning: body record for class %d runs past the end of the chunk.\n", idx);
+			return;
+		}
+		if(nrec < 256) xrecoffs[nrec] = xstyoffs + walked;
+		nrec++;
+		walked += 2 + len;
+	}
+	if(walked > USTY_MAX_XSTYBYTES) {
+		printf("Warning: body array of %u bytes is past the scan's one-page reach (max %d).\n",
+			walked, USTY_MAX_XSTYBYTES);
+	}
+	if(nrec != nxsty) {
+		printf("Warning: header says %d body records, but the array holds %d.\n",
+			nxsty, nrec);
+		return;
+	}
+
+	blockbytes = wantxsty + walked;
+	wantwords = (blockbytes + 1) / 2;
+	if(totalwords != wantwords) {
+		printf("Warning: header says %u words resident, but the counts need %u.\n",
+			totalwords, wantwords);
+		return;
+	}
+	if(recoffs + totalwords * 2 != size) {
+		printf("Warning: chunk is %u bytes; the header describes %u.\n",
+			size, recoffs + totalwords * 2);
+		return;
+	}
 
 	decode_usty_records(d, tag, recoffs, nclass, nrec, xrecoffs);
 }
