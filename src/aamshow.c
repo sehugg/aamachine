@@ -254,10 +254,8 @@ static void decode_usty_records(uint8_t *d, uint8_t tag, uint32_t recoffs,
 static void decode_usty_ext(uint8_t *d, uint32_t size, uint8_t tag) {
 	uint8_t nclass, nxsty;
 	uint32_t recoffs, xstyoffs, totalwords, xstyrel;
-	uint32_t wantxsty, wantwords, blockbytes;
 	uint32_t xrecoffs[256];
-	uint32_t walked;
-	int nrec;
+	int nrec = 0; // no xsty records yet
 
 	if(size < USTY_HDRSIZE) {
 		printf("Chunk too small (%u bytes) to hold a USTY header.\n", size);
