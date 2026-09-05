@@ -123,15 +123,23 @@ static const struct {
 
 // Style warnings, routed through swarn() so that they can be silenced
 // while parsing declarations that a -iftf-sys- declaration in the same
-// class overrides anyway.
+// class overrides anyway. They are prefixed with the style-name of the
+// class being parsed (see sty_name), so the author can tell which
+// declaration each complaint is about.
 static int sty_quiet;
+
+// Name of the style class currently being parsed; "class N" if the LOOK
+// chunk does not carry a style-name: declaration for it.
+static const char *sty_name;
 
 static void swarn(const char *fmt, ...) {
 	va_list ap;
+	char msg[1024];
 	if(sty_quiet) return;
 	va_start(ap, fmt);
-	vwarning(WARN_STYLE, fmt, ap);
+	vsnprintf(msg, sizeof(msg), fmt, ap);
 	va_end(ap);
+	warning(WARN_STYLE, "%s: %s", sty_name, msg);
 }
 
 // Map an rgb triplet to the nearest VIC-II color, using a perceptual
@@ -525,12 +533,33 @@ static styclass *parse_look(int *nclassp) {
 		uint32_t ptr, end, p;
 		int hasiftf = 0;
 		char pfx[32];
+		char namebuf[64], line[64];
 		size_t plen;
 
 		if((uint32_t)(2 + 2 * i + 2) > looksize) break;
 		ptr = get16(look + 2 + 2 * i);
 		if(ptr >= looksize) continue;
 		end = looksize;
+
+		// Pick up the class's style-name, so warnings can name it.
+		snprintf(namebuf, sizeof(namebuf), "class %d", i);
+		sty_name = namebuf;
+		p = ptr;
+		while(p < end && look[p]) {
+			uint32_t linelen = 0;
+			while(p + linelen < end && look[p + linelen]) linelen++;
+			if(linelen < sizeof(line)) {
+				char nm[56];
+				memcpy(line, look + p, linelen);
+				line[linelen] = 0;
+				// "style-name: title", always written in this exact case.
+				if(1 == sscanf(line, " style-name : %55s", nm)) {
+					snprintf(namebuf, sizeof(namebuf), "style \"%s\"", nm);
+					sty_name = namebuf;
+				}
+			}
+			p += linelen + 1;
+		}
 
 		// Does this class carry declarations addressed to this machine?
 		// If so, the generic ones are only a fallback that the prefixed
