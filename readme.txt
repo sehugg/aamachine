@@ -129,6 +129,11 @@ Project website:
 
 Release notes:
 
+	1.0.4:
+
+		Aambundle now replaces the LOOK chunk with an internal USTY
+		chunk for 6502 targets. Use -help-all to see new warnings.
+
 	1.0.3:
 
 		New Apple II interpreter:
@@ -161,9 +166,6 @@ Release notes:
 		C64 interpreter: Added "reverse" (warm palette) styling.
 
 		C64 interpreter: Fixed inline progress bars.
-
-		Aambundle: Warn when bundling stories for 6502 that have
-		unsupported codepoints (see usage for warning flags)
 
 	1.0.2:
 	
