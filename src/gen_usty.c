@@ -130,7 +130,7 @@ static int sty_quiet;
 
 // Name of the style class currently being parsed; "class N" if the LOOK
 // chunk does not carry a style-name: declaration for it.
-static const char *sty_name;
+static const char *sty_name = 0;
 
 static void swarn(const char *fmt, ...) {
 	va_list ap;
@@ -139,7 +139,7 @@ static void swarn(const char *fmt, ...) {
 	va_start(ap, fmt);
 	vsnprintf(msg, sizeof(msg), fmt, ap);
 	va_end(ap);
-	warning(WARN_STYLE, "%s: %s", sty_name, msg);
+	warning(WARN_STYLE, "style class %s: %s", sty_name ? sty_name : "(unknown)", msg);
 }
 
 // Map an rgb triplet to the nearest VIC-II color, using a perceptual
@@ -499,6 +499,13 @@ static uint16_t get16(const uint8_t *p) {
 	return (p[0] << 8) | p[1];
 }
 
+// Length of the null-terminated line at look[p], clamped to end.
+static uint32_t line_len(const uint8_t *look, uint32_t p, uint32_t end) {
+	uint32_t len = 0;
+	while(p + len < end && look[p + len]) len++;
+	return len;
+}
+
 // ----------------------------------------------------------------------------
 // LOOK parse: read the class count, then walk each class's declaration
 // block (null-terminated strings, a lone null byte ends the block)
@@ -533,7 +540,7 @@ static styclass *parse_look(int *nclassp) {
 		uint32_t ptr, end, p;
 		int hasiftf = 0;
 		char pfx[32];
-		char namebuf[64], line[64];
+		char namebuf[64];
 		size_t plen;
 
 		if((uint32_t)(2 + 2 * i + 2) > looksize) break;
@@ -541,38 +548,33 @@ static styclass *parse_look(int *nclassp) {
 		if(ptr >= looksize) continue;
 		end = looksize;
 
-		// Pick up the class's style-name, so warnings can name it.
+		// One lookahead pass over the class's declaration lines: pick up
+		// its style-name (so warnings can name it), and check whether it
+		// carries -iftf-sys-<target>- declarations for this machine. If so,
+		// the generic (unprefixed) declarations are only a fallback that the
+		// prefixed pass replaces wholesale -- so pass 0 below runs with
+		// warnings off, and the author is not scolded twice for the same
+		// styling.
 		snprintf(namebuf, sizeof(namebuf), "class %d", i);
-		sty_name = namebuf;
-		p = ptr;
-		while(p < end && look[p]) {
-			uint32_t linelen = 0;
-			while(p + linelen < end && look[p + linelen]) linelen++;
-			if(linelen < sizeof(line)) {
-				char nm[56];
-				memcpy(line, look + p, linelen);
-				line[linelen] = 0;
-				// "style-name: title", always written in this exact case.
-				if(1 == sscanf(line, " style-name : %55s", nm)) {
-					snprintf(namebuf, sizeof(namebuf), "style \"%s\"", nm);
-					sty_name = namebuf;
-				}
-			}
-			p += linelen + 1;
-		}
-
-		// Does this class carry declarations addressed to this machine?
-		// If so, the generic ones are only a fallback that the prefixed
-		// pass replaces wholesale -- parse pass 0 with warnings off, so
-		// the author is not scolded twice for the same styling.
+		sty_name = namebuf; // this is on the stack so we have to unset it
 		snprintf(pfx, sizeof(pfx), "-iftf-sys-%s-", sty_target->name);
 		plen = strlen(pfx);
 		p = ptr;
 		while(p < end && look[p]) {
-			uint32_t linelen = 0;
-			while(p + linelen < end && look[p + linelen]) linelen++;
+			uint32_t linelen = line_len(look, p, end);
+			char line[64], nm[56];
+
 			if(linelen > plen && !strncasecmp((const char *) look + p, pfx, plen))
 				hasiftf = 1;
+			// "style-name: title", always written in this exact case.
+			if(linelen < sizeof(line)) {
+				memcpy(line, look + p, linelen);
+				line[linelen] = 0;
+				if(1 == sscanf(line, " style-name : %55s", nm)) {
+					snprintf(namebuf, sizeof(namebuf), "@%s", nm);
+					sty_name = namebuf;
+				}
+			}
 			p += linelen + 1;
 		}
 
@@ -583,13 +585,13 @@ static styclass *parse_look(int *nclassp) {
 			sty_quiet = hasiftf && pass == 0;
 			p = ptr;
 			while(p < end && look[p]) {
-				uint32_t linelen = 0;
-				while(p + linelen < end && look[p + linelen]) linelen++;
+				uint32_t linelen = line_len(look, p, end);
 				parse_decl(&cls[i], (const char *) look + p, linelen, pass);
 				p += linelen + 1;
 			}
 		}
 		sty_quiet = 0; // re-enable warnings
+		sty_name = 0; // unset style class name
 	}
 	*nclassp = n;
 	return cls;
