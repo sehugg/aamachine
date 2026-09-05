@@ -69,16 +69,6 @@ typedef enum {
 void warning(warn_id_t id, const char *fmt, ...);
 void vwarning(warn_id_t id, const char *fmt, va_list ap);
 
-/* 6502 rewrite chunks helper */
-
-chunk_action_t rewrite_6502(
-	const char *id,
-	uint8_t *data,
-	uint32_t size,
-	char *newid,
-	uint8_t **newdata,
-	uint32_t *newsize);
-
 /* Style precomputation (USTY chunk), implemented in gen_usty.c. Call
  * gen_usty_set_target() before rewrite_chunks() on the 8-bit targets.
  */

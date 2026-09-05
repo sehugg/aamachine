@@ -697,9 +697,10 @@ chunk_action_t rewrite_6502_sty(
 	uint8_t **newdata,
 	uint32_t *newsize)
 {
-	chunk_action_t act = rewrite_6502(id, data, size, newid, newdata, newsize);
+	// drop FILE chunks
+	if(!strcmp(id, "FILE")) return CHUNK_DROP;
 
-	if(act == CHUNK_DROP) return act;
+	chunk_action_t act = CHUNK_KEEP;
 
 	if(sty_target && !sty_emitted && !strcmp(id, "LOOK")) {
 		if(!sty_payload) {
