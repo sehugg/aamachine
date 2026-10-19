@@ -400,7 +400,7 @@ window.run_game = function(story64, options) {
 				// We have to be a bit careful about clearing mainarray because we should preserve the most recent (body style $)
 				let latest_style = null;
 				for(const el of this.mainarray) {
-					if(el.t == 'bs') latest_style = el;
+					if(el.t == 'sb') latest_style = el;
 				}
 				this.mainarray = latest_style ? [latest_style] : [];
 				this.currarray = this.mainarray;
